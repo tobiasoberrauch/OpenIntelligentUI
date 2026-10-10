@@ -1,11 +1,12 @@
 "use client";
 
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
 export type ProviderKeys = { openai: string; jev: string };
 type ProviderKeysContextValue = {
   headers: Record<string, string> | undefined;
   hasKeys: boolean;
+  serverMode: boolean;
   session: number;
   save: (keys: ProviderKeys) => void;
   clear: () => void;
@@ -17,17 +18,29 @@ type ProviderKeysContextValue = {
 };
 const ProviderKeysContext = createContext<ProviderKeysContextValue | null>(null);
 
-export function ProviderKeysProvider({ children }: { children: ReactNode }) {
+export function ProviderKeysProvider({ children }: { children: React.ReactNode }) {
   // Deliberately memory-only: never put credentials in browser storage or agent state.
   const [keys, setKeys] = useState<ProviderKeys | null>(null);
   const [session, setSession] = useState(0);
   const [draft, setDraft] = useState("");
   const [keysOpen, setKeysOpen] = useState(false);
+  const [serverMode, setServerMode] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/capabilities", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.server_credentials === true) setServerMode(true);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const newChat = () => { setDraft(""); setSession((value) => value + 1); };
   return (
     <ProviderKeysContext.Provider value={{
       headers: keys ? { "x-openai-api-key": keys.openai, "x-jev-api-key": keys.jev } : undefined,
       hasKeys: keys !== null,
+      serverMode,
       session,
       save: (value) => { setKeys(value); setKeysOpen(false); setSession((value) => value + 1); },
       clear: () => { setKeys(null); newChat(); },

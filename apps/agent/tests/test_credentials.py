@@ -162,10 +162,25 @@ def test_agent_stream_keeps_credentials_out_of_checkpoints_and_separates_threads
 def test_main_starts_without_server_credentials(monkeypatch):
     import subprocess
     import sys
-    environment = {k: v for k, v in os.environ.items() if k not in {'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'TYPESAFE_API_KEY', 'LLM_MODEL'}}
+    environment = {k: v for k, v in os.environ.items() if k not in {'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'TYPESAFE_API_KEY', 'LLM_MODEL', 'OPENAI_BASE_URL'}}
     environment['PYTHON_DOTENV_DISABLED'] = '1'
     result = subprocess.run([sys.executable, '-c', "from fastapi.testclient import TestClient; from main import app; c=TestClient(app); assert c.get('/health').status_code == 200; r=c.post('/', json={}); assert r.status_code == 401; assert r.json()['code'] == 'credentials_required'"], env=environment, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_server_credentials_available_with_local_router(monkeypatch):
+    from src.credentials import server_credentials_available
+
+    monkeypatch.setenv('LLM_MODEL', 'qwen3.8-27b')
+    monkeypatch.setenv('OPENAI_API_KEY', 'server-openai')
+    monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
+    monkeypatch.delenv('TYPESAFE_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_BASE_URL', raising=False)
+    assert server_credentials_available() is False
+    monkeypatch.setenv('OPENAI_BASE_URL', 'http://10.200.3.60:4000/v1')
+    assert server_credentials_available() is True
+    monkeypatch.delenv('OPENAI_API_KEY')
+    assert server_credentials_available() is False
 
 
 @pytest.mark.parametrize(('statuses', 'code'), [([200, 200], None), ([200, 403], 'jev_invalid'), ([429, 200], 'provider_unavailable')])

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import type { ComponentProps } from "react";
 import type { CopilotChatView } from "@copilotkit/react-core/v2";
@@ -16,7 +16,7 @@ vi.mock("@copilotkit/react-core/v2", () => ({
 const submit = vi.fn();
 const select = vi.fn();
 function Harness() {
-  const { session, keysOpen, setKeysOpen, save, newChat } = useProviderKeys();
+  const { session, keysOpen, setKeysOpen, save, newChat, serverMode } = useProviderKeys();
   return <>
     <KeyGatedChatView key={session} onSubmitMessage={submit} onSelectSuggestion={select} />
     {keysOpen && <div role="dialog">
@@ -24,6 +24,7 @@ function Harness() {
       <button onClick={() => save({ openai: "test", jev: "test" })}>Save tested keys</button>
     </div>}
     <button onClick={newChat}>New chat</button>
+    <output data-testid="server-mode">{String(serverMode)}</output>
   </>;
 }
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
@@ -44,6 +45,16 @@ it("opens setup before sending and preserves the message across cancel and the k
   fireEvent.click(screen.getByText("Send"));
   expect(submit).toHaveBeenCalledExactlyOnceWith("Show a map");
   expect(screen.getByLabelText("Message")).toHaveValue("");
+});
+
+it("lets messages through without visitor keys when the agent runs in server mode", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ server_credentials: true }) }));
+  render(<ProviderKeysProvider><Harness /></ProviderKeysProvider>);
+  await waitFor(() => expect(screen.getByTestId("server-mode")).toHaveTextContent("true"));
+  fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Show a map" } });
+  fireEvent.click(screen.getByText("Send"));
+  expect(submit).toHaveBeenCalledExactlyOnceWith("Show a map");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
 it("gates example prompts and clears the preserved draft when starting a new chat", () => {

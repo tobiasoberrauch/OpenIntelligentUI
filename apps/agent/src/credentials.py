@@ -48,7 +48,10 @@ def parse_credentials(headers):
 def server_credentials_available():
     model = os.environ.get('LLM_MODEL', 'chat-latest').strip()
     key = 'ANTHROPIC_API_KEY' if model.startswith('claude-') else 'OPENAI_API_KEY'
-    return bool(os.environ.get(key, '').strip() and os.environ.get('TYPESAFE_API_KEY', '').strip())
+    if not os.environ.get(key, '').strip():
+        return False
+    # Jev routing can fall back to the configured OpenAI-compatible endpoint.
+    return bool(os.environ.get('TYPESAFE_API_KEY', '').strip() or os.environ.get('OPENAI_BASE_URL', '').strip())
 
 
 class CredentialsMiddleware:

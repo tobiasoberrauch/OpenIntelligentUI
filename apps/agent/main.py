@@ -20,6 +20,7 @@ from src.credentials import (
     CredentialsMiddleware,
     CredentialScopedAgent,
     current_credentials,
+    server_credentials_available,
     validate_credentials,
 )
 from src.visualization_router import JevVisualizationMiddleware
@@ -64,6 +65,11 @@ async def validate_provider_credentials():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/capabilities")
+def capabilities():
+    return {"server_credentials": server_credentials_available()}
 
 
 add_langgraph_fastapi_endpoint(

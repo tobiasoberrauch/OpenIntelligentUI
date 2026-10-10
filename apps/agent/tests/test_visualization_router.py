@@ -154,6 +154,138 @@ def test_context_excludes_system_and_tool_content_and_is_bounded():
     assert len(context[0]["content"]) == 6000
 
 
+def test_local_router_used_when_no_jev_key(monkeypatch):
+    import httpx
+    import src.visualization_router as router
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://10.200.3.60:4000/v1")
+
+    class FakeStructured:
+        def invoke(self, messages):
+            assert messages[-1]["role"] == "user"
+            assert "bar_chart" in messages[-1]["content"]
+            return router.ChoiceAnswer(
+                type="choice", choice="table", confidence=0.8, probabilities={"table": 0.8}
+            )
+
+    class FakeModel:
+        def with_structured_output(self, schema):
+            assert schema is router.ChoiceAnswer
+            return FakeStructured()
+
+    monkeypatch.setattr(router, "_local_model", lambda: FakeModel())
+
+    def no_http(*args, **kwargs):
+        raise AssertionError("Jev endpoint must not be called")
+
+    monkeypatch.setattr(httpx.Client, "post", no_http)
+    decision = router.route([{"role": "human", "content": "compare tariffs in a table"}])
+    assert decision["renderer"] == "a2ui"
+    assert decision["source"] == "local"
+
+
+def test_local_aroute_uses_async_invoke(monkeypatch):
+    import asyncio
+    import src.visualization_router as router
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://10.200.3.60:4000/v1")
+
+    class FakeStructured:
+        async def ainvoke(self, messages):
+            return router.ChoiceAnswer(
+                type="choice", choice="map", confidence=0.7, probabilities={"map": 0.7}
+            )
+
+    class FakeModel:
+        def with_structured_output(self, schema):
+            return FakeStructured()
+
+    monkeypatch.setattr(router, "_local_model", lambda: FakeModel())
+    decision = asyncio.run(router.aroute([{"role": "human", "content": "show berlin"}]))
+    assert decision["visualization"] == "map"
+    assert decision["source"] == "local"
+
+
+def test_local_router_invalid_choice_fails_loudly(monkeypatch):
+    import src.visualization_router as router
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://10.200.3.60:4000/v1")
+
+    # The Literal constrains structured output; bypass validation to prove the
+    # guard still rejects out-of-taxonomy choices from any source.
+    invalid = router.ChoiceAnswer.model_construct(
+        type="choice", choice="invented", confidence=0.9, probabilities={"invented": 0.9}
+    )
+
+    class FakeModel:
+        def with_structured_output(self, schema):
+            class Structured:
+                def invoke(self, messages):
+                    return invalid
+            return Structured()
+
+    monkeypatch.setattr(router, "_local_model", lambda: FakeModel())
+    with pytest.raises(ValueError, match="invalid decision"):
+        router.route([{"role": "human", "content": "anything"}])
+
+
+def test_local_router_failure_is_actionable_without_details(monkeypatch):
+    import src.visualization_router as router
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://10.200.3.60:4000/v1")
+
+    def boom():
+        raise RuntimeError("internal model details secret")
+
+    monkeypatch.setattr(router, "_local_model", boom)
+    with pytest.raises(ValueError, match="Local visualization routing failed") as error:
+        router.route([{"role": "human", "content": "anything"}])
+    assert "secret" not in str(error.value)
+
+
+def test_jev_key_wins_over_local_endpoint(monkeypatch):
+    import httpx
+    import src.visualization_router as router
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "jev-test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://10.200.3.60:4000/v1")
+    seen = []
+
+    def post(self, url, **kwargs):
+        seen.append(url)
+        return httpx.Response(200, json=response("line_chart"))
+
+    monkeypatch.setattr(httpx.Client, "post", post)
+    router.route([{"role": "human", "content": "trend"}])
+    assert seen == [router.JEV_URL]
+
+
+def test_byok_credentials_always_use_jev(monkeypatch):
+    import httpx
+    from src.credentials import Credentials, current_credentials
+    import src.visualization_router as router
+
+    token = current_credentials.set(Credentials(openai="o", jev="j"))
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://10.200.3.60:4000/v1")
+    seen = []
+
+    def post(self, url, **kwargs):
+        seen.append(url)
+        return httpx.Response(200, json=response("text"))
+
+    try:
+        monkeypatch.setattr(httpx.Client, "post", post)
+        router.route([])
+    finally:
+        current_credentials.reset(token)
+    assert seen == [router.JEV_URL]
+
+
 def test_real_graph_filters_injected_frontend_tools_and_routes_once(monkeypatch):
     import asyncio
     from deepagents import create_deep_agent

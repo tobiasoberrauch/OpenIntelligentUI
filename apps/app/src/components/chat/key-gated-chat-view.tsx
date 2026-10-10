@@ -6,13 +6,14 @@ import { useProviderKeys } from "./provider-keys";
 
 /** Gate submission before CopilotKit adds a message or starts a provider request. */
 function KeyGatedChatViewComponent(props: ComponentProps<typeof CopilotChatView>) {
-  const { hasKeys, draft, setDraft, setKeysOpen } = useProviderKeys();
+  const { hasKeys, serverMode, draft, setDraft, setKeysOpen } = useProviderKeys();
+  const ready = hasKeys || serverMode;
   return <CopilotChatView
     {...props}
     inputValue={draft}
     onInputChange={setDraft}
     onSubmitMessage={(value) => {
-      if (!hasKeys) {
+      if (!ready) {
         setDraft(value);
         setKeysOpen(true);
         return;
@@ -21,7 +22,7 @@ function KeyGatedChatViewComponent(props: ComponentProps<typeof CopilotChatView>
       props.onSubmitMessage?.(value);
     }}
     onSelectSuggestion={(suggestion, index) => {
-      if (!hasKeys) {
+      if (!ready) {
         setDraft(suggestion.message);
         setKeysOpen(true);
         return;
