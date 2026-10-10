@@ -207,15 +207,33 @@ class CredentialScopedModel(BaseChatModel):
 
     def _stream(self, messages, stop=None, run_manager=None, **kwargs):
         with provider_error_boundary():
-            model, options = self._target(kwargs)
-            for chunk in model.stream(messages, stop=stop, **options):
+            model, options = silent_target(*self._target(kwargs))
+            for chunk in model.stream(messages, config=SILENT, stop=stop, **options):
                 yield ChatGenerationChunk(message=as_chunk(chunk))
 
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
         with provider_error_boundary():
-            model, options = self._target(kwargs)
-            async for chunk in model.astream(messages, stop=stop, **options):
+            model, options = silent_target(*self._target(kwargs))
+            async for chunk in model.astream(messages, config=SILENT, stop=stop, **options):
                 yield ChatGenerationChunk(message=as_chunk(chunk))
+
+
+# CredentialScopedModel already reports every chunk it yields. If the inner model
+# also reports to the inherited callbacks, astream_events (and therefore AG-UI)
+# sees each token and tool-call chunk twice: duplicated TEXT_MESSAGE_CONTENT,
+# TOOL_CALL_START and TOOL_CALL_ARGS events. An explicit empty callback list
+# detaches the inner call, but RunnableBinding (from bind_tools) re-merges the
+# inherited callbacks, so the binding is unwrapped into plain call kwargs first.
+SILENT = {"callbacks": []}
+
+
+def silent_target(model, options):
+    from langchain_core.runnables import RunnableBinding
+
+    while isinstance(model, RunnableBinding):
+        options = {**model.kwargs, **options}
+        model = model.bound
+    return model, options
 
 
 def as_chunk(message):

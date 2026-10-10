@@ -132,3 +132,34 @@ def test_compatible_endpoint_requires_model_name(monkeypatch, value):
         monkeypatch.setenv("LLM_MODEL", value)
     with pytest.raises(ValueError, match="LLM_BASE_URL"):
         build_model()
+
+
+def test_credential_scoped_model_streams_each_chunk_once():
+    # The wrapper reports every chunk it yields; the inner (tool-bound) model must
+    # not report them again, or AG-UI streams duplicated text and tool-call deltas.
+    import asyncio
+
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+
+    from src.model import CredentialScopedModel
+
+    class ToolFake(GenericFakeChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self.bind(tools=tools)
+
+    inner = ToolFake(messages=iter([AIMessage(content="hello streaming world")]))
+    tool = {"type": "function", "function": {"name": "t", "parameters": {"type": "object", "properties": {}}}}
+    wrapped = CredentialScopedModel(fallback=inner).bind_tools([tool])
+
+    async def run():
+        names, text = [], []
+        async for event in wrapped.astream_events("hi", version="v2"):
+            if event["event"] == "on_chat_model_stream":
+                names.append(event["name"])
+                text.append(event["data"]["chunk"].content)
+        return names, "".join(text)
+
+    names, text = asyncio.run(run())
+    assert names and set(names) == {"CredentialScopedModel"}
+    assert text == "hello streaming world"
