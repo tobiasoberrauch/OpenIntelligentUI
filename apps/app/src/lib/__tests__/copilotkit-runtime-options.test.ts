@@ -4,8 +4,8 @@ import { buildRuntimeOptions } from "../copilotkit-runtime-options";
 
 describe("buildRuntimeOptions", () => {
   it("isolates credentials between runtime instances", () => {
-    const first = buildRuntimeOptions({ providerHeaders: { "x-openai-api-key": "first", "x-jev-api-key": "first-jev" } });
-    const second = buildRuntimeOptions({ providerHeaders: { "x-openai-api-key": "second", "x-jev-api-key": "second-jev" } });
+    const first = buildRuntimeOptions({ providerHeaders: { "x-openai-api-key": "first" } });
+    const second = buildRuntimeOptions({ providerHeaders: { "x-openai-api-key": "second" } });
     expect(first.agents.default.headers["x-openai-api-key"]).toBe("first");
     expect(second.agents.default.headers["x-openai-api-key"]).toBe("second");
     expect(buildRuntimeOptions({}).agents.default.headers).not.toHaveProperty("x-openai-api-key");

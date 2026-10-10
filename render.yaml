@@ -23,14 +23,29 @@ services:
         sync: false
       - key: LANGSMITH_API_KEY
         sync: false
-      # chat-latest and gpt-* route via OpenAI, Claude names via Anthropic
-      # (see apps/agent/src/model.py)
+      # chat-latest and gpt-* route via OpenAI, Claude names via Anthropic;
+      # with LLM_BASE_URL any OpenAI-compatible server: then set LLM_MODEL to
+      # the served model name (see apps/agent/src/model.py, docs/open-models.md)
       - key: LLM_MODEL
         value: chat-latest
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      # Visualization router: auto uses Jev when TYPESAFE_API_KEY is set,
+      # otherwise an OpenAI-compatible model (the answer model endpoint by default)
+      - key: ROUTER_BACKEND
+        value: auto
       - key: TYPESAFE_API_KEY
         sync: false
       - key: JEV_MODEL
         value: jev-latest
+      - key: ROUTER_BASE_URL
+        sync: false
+      - key: ROUTER_MODEL
+        sync: false
+      - key: ROUTER_API_KEY
+        sync: false
     buildFilter:
       paths:
         - apps/agent/**
@@ -56,6 +71,10 @@ services:
       - key: APP_URL
         value: https://opengenerativeui.copilotkit.ai
       - key: SKIP_INSTALL_DEPS
+        value: "true"
+      # Public demo: visitors bring their own OpenAI key. Remove for a private
+      # deployment that uses the agent's server-side model. Build-time setting.
+      - key: NEXT_PUBLIC_BYOK
         value: "true"
       - key: LANGGRAPH_DEPLOYMENT_URL
         fromService:

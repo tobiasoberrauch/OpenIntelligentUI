@@ -3,7 +3,8 @@ import { readProviderHeaders, PROVIDER_KEY_INPUT_ERROR } from "@/lib/provider-ke
 
 const errors: Record<string, string> = {
   openai_invalid: "OpenAI could not validate this key for the answer model. Check its permissions and model access.",
-  jev_invalid: "Jev could not validate this key. Check your Jev API key and account access.",
+  jev_invalid: "Jev could not validate this key. Check your Jev API key and account access, or leave it empty.",
+  jev_required: "This deployment chooses visualizations with Jev. Add your Jev API key.",
   provider_unavailable: "A provider is unavailable or rate limited. Please try again shortly.",
   invalid_keys: PROVIDER_KEY_INPUT_ERROR,
 };

@@ -1,5 +1,6 @@
 """Chat model factory for the agent."""
 
+import json
 import os
 from contextlib import contextmanager
 
@@ -19,13 +20,57 @@ DEFAULT_MODEL = "chat-latest"
 MAX_TOKENS = 64000
 
 
+def compatible_base_url() -> str:
+    """OpenAI-compatible endpoint for open models (vLLM, Ollama, llama.cpp, LiteLLM …)."""
+    return os.environ.get("LLM_BASE_URL", "").strip()
+
+
+def build_compatible_model(model_name: str, base_url: str) -> BaseChatModel:
+    from langchain_openai import ChatOpenAI
+
+    if not model_name:
+        raise ValueError(
+            "LLM_MODEL must name the model served at LLM_BASE_URL "
+            "(for example the vLLM --served-model-name or the Ollama tag)."
+        )
+    options = {}
+    max_tokens = os.environ.get("LLM_MAX_TOKENS", "").strip()
+    if max_tokens:
+        # Unset by default: vLLM rejects max_tokens beyond the remaining context,
+        # while unset lets the server use the full remaining budget.
+        options["max_tokens"] = int(max_tokens)
+    raw_extra = os.environ.get("LLM_EXTRA_BODY", "").strip()
+    if raw_extra:
+        try:
+            extra = json.loads(raw_extra)
+        except json.JSONDecodeError as exc:
+            raise ValueError("LLM_EXTRA_BODY must be a JSON object.") from exc
+        if not isinstance(extra, dict):
+            raise ValueError("LLM_EXTRA_BODY must be a JSON object.")
+        options["extra_body"] = extra
+    return ChatOpenAI(
+        model=model_name,
+        base_url=base_url,
+        # Local servers usually ignore the key; the client still needs a value.
+        api_key=os.environ.get("LLM_API_KEY", "").strip() or "EMPTY",
+        # Open-model servers implement Chat Completions, not the Responses API.
+        use_responses_api=False,
+        **options,
+    )
+
+
 def build_model(*, allow_unconfigured: bool = False) -> BaseChatModel:
+    base_url = compatible_base_url()
+    if base_url:
+        # No default here: chat-latest means nothing to a self-hosted server.
+        return build_compatible_model(os.environ.get("LLM_MODEL", "").strip(), base_url)
     model_name = os.environ.get("LLM_MODEL", DEFAULT_MODEL).strip()
     is_openai = model_name == "chat-latest" or model_name.startswith("gpt-")
     if not is_openai and not model_name.startswith("claude-"):
         raise ValueError(
             "LLM_MODEL must name a supported provider: claude-* (Anthropic) "
-            "or gpt-*/chat-latest (OpenAI). Unset LLM_MODEL to use the default."
+            "or gpt-*/chat-latest (OpenAI), or set LLM_BASE_URL for an "
+            "OpenAI-compatible server. Unset LLM_MODEL to use the default."
         )
     key_name = "OPENAI_API_KEY" if is_openai else "ANTHROPIC_API_KEY"
     if not os.environ.get(key_name, "").strip():
@@ -54,7 +99,7 @@ class UnconfiguredModel(BaseChatModel):
         return "unconfigured"
 
     def _generate(self, *args, **kwargs):
-        raise ValueError("Provider credentials are required. Add OpenAI and Jev keys.")
+        raise ValueError("Provider credentials are required. Add an OpenAI key.")
 
     def bind_tools(self, tools, **kwargs):
         return self
@@ -162,15 +207,33 @@ class CredentialScopedModel(BaseChatModel):
 
     def _stream(self, messages, stop=None, run_manager=None, **kwargs):
         with provider_error_boundary():
-            model, options = self._target(kwargs)
-            for chunk in model.stream(messages, stop=stop, **options):
+            model, options = silent_target(*self._target(kwargs))
+            for chunk in model.stream(messages, config=SILENT, stop=stop, **options):
                 yield ChatGenerationChunk(message=as_chunk(chunk))
 
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
         with provider_error_boundary():
-            model, options = self._target(kwargs)
-            async for chunk in model.astream(messages, stop=stop, **options):
+            model, options = silent_target(*self._target(kwargs))
+            async for chunk in model.astream(messages, config=SILENT, stop=stop, **options):
                 yield ChatGenerationChunk(message=as_chunk(chunk))
+
+
+# CredentialScopedModel already reports every chunk it yields. If the inner model
+# also reports to the inherited callbacks, astream_events (and therefore AG-UI)
+# sees each token and tool-call chunk twice: duplicated TEXT_MESSAGE_CONTENT,
+# TOOL_CALL_START and TOOL_CALL_ARGS events. An explicit empty callback list
+# detaches the inner call, but RunnableBinding (from bind_tools) re-merges the
+# inherited callbacks, so the binding is unwrapped into plain call kwargs first.
+SILENT = {"callbacks": []}
+
+
+def silent_target(model, options):
+    from langchain_core.runnables import RunnableBinding
+
+    while isinstance(model, RunnableBinding):
+        options = {**model.kwargs, **options}
+        model = model.bound
+    return model, options
 
 
 def as_chunk(message):

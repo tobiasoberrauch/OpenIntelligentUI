@@ -1,8 +1,15 @@
 # Visualization routing
 
-The answer model defaults to `chat-latest`, the documented API alias for the latest ChatGPT Instant model. This is a moving alias, not a pinned `gpt-6-instant` snapshot. Its available model ID was verified using the configured OpenAI account. See [OpenAI's model documentation](https://developers.openai.com/api/docs/models/chat-latest).
+Before each new user message, a router makes one typed presentation decision: which of thirteen visualizations fits, and therefore which renderer the answer model may use (`apps/agent/src/visualization_router.py`). The router backend is selectable:
 
-Jev (`jev-latest`) makes one typed presentation decision for each new user message through [TypeSafe's System One API](https://docs.typesafe.ai/introduction/quickstart). It receives up to four recent user/assistant text messages, capped at 6,000 characters each. It does not receive API keys, system instructions, raw tool outputs, or generated tool code.
+| `ROUTER_BACKEND` | Router |
+| --- | --- |
+| `auto` (default) | `jev` when a Jev key is available (the visitor's BYOK Jev key, or `TYPESAFE_API_KEY` for server requests), otherwise `llm` |
+| `jev` | [TypeSafe's Jev](https://docs.typesafe.ai/introduction/quickstart) (`jev-latest`, System One API), as in upstream Open Intelligent UI |
+| `llm` | A structured-output request to any OpenAI-compatible chat-completions endpoint: vLLM, SGLang, Ollama, llama.cpp `llama-server`, LiteLLM, LocalAI, TGI or OpenAI |
+| `none` | No routing call; the answer model chooses |
+
+Either router receives up to four recent user/assistant text messages, capped at 6,000 characters each, as data. It does not receive API keys, system instructions, raw tool outputs, or generated tool code. Jev answers a typed choice question with confidence and probabilities; the `llm` router's answer is constrained to `{"visualization": <enum>, "confidence": <number>}`. The stored decision records its `source` (`jev`, `router` or `answer_model`).
 
 | Selected visualization | Renderer |
 | --- | --- |
@@ -13,11 +20,30 @@ Jev (`jev-latest`) makes one typed presentation decision for each new user messa
 | Calculator | Open Generative UI |
 | Map or animated itinerary | Open Generative UI |
 
-The renderer is derived from Jev's validated choice, preventing contradictory renderer/type pairs. The selection is stored with the user message ID in thread state and reused during tool continuations. A new user message is classified again with conversation context. Middleware filters rendering tools after CopilotKit injects them; unrelated data/state tools remain available. The answer model receives the selected visualization type plus the relevant rendering contract.
+The renderer is derived from the router's validated choice, preventing contradictory renderer/type pairs. The selection is stored with the user message ID in thread state and reused during tool continuations. A new user message is classified again with conversation context. Middleware filters rendering tools after CopilotKit injects them; unrelated data/state tools remain available. The answer model receives the selected visualization type plus the relevant rendering contract.
 
 The A2UI catalog supplies a semantic HTML table with column headers, a caption, keyboard-focusable horizontal scrolling, and a required provenance label. It accepts at most 12 columns and 200 rows and rejects mismatched row widths. React renders values as text. Charts and diagrams continue to use the existing isolated sandbox.
 
-Set `OPENAI_API_KEY`, `TYPESAFE_API_KEY`, `LLM_MODEL=chat-latest`, and optionally `JEV_MODEL=jev-latest` on the agent server. Provider secrets never belong in browser variables. Existing `claude-*` and `gpt-*` overrides remain available. Jev authentication failures, invalid choices, and timeouts fail the turn with a retryable error; there is no silent fallback claiming that Jev made a decision. Successful health checks confirm the server is running, not provider access.
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ROUTER_BACKEND` | `auto` | `auto`, `jev`, `llm` or `none` (see above) |
+| `TYPESAFE_API_KEY` | Unset | Jev key for server requests; BYOK visitors use their own Jev key and never the server's |
+| `JEV_MODEL` | `jev-latest` | Jev model for server requests; BYOK requests use `jev-latest` |
+| `ROUTER_BASE_URL` | `LLM_BASE_URL`, else OpenAI | OpenAI-compatible endpoint for routing |
+| `ROUTER_MODEL` | `LLM_MODEL` | Served model name; a small instruct model is enough |
+| `ROUTER_API_KEY` | `LLM_API_KEY` when routing via `LLM_BASE_URL`; `OPENAI_API_KEY` for OpenAI | Sent as a bearer token only when set; `LLM_API_KEY` is never sent to a separate `ROUTER_BASE_URL` |
+| `ROUTER_EXTRA_BODY` | Unset | JSON merged into the request, e.g. `{"chat_template_kwargs": {"enable_thinking": false}}` for Qwen3 on vLLM |
+| `ROUTER_MAX_TOKENS` | `512` | Output budget; raise it for reasoning models that think before answering |
+| `ROUTER_TIMEOUT` | `30` | Seconds per request (Jev and `llm`) |
+| `ROUTER_ON_ERROR` | `auto` | `auto`: on failure the answer model chooses; `fail`: fail the turn with a retryable error |
+
+The following applies to the `llm` backend. Servers differ in structured-output support. The router asks for `json_schema` first, then `json_object`, then plain prompting. After a definitive rejection (HTTP 400, 415, 422 or 501) the accepted format is remembered per endpoint and model; a 500 degrades only that request, because it may be transient. The parser tolerates `<think>` blocks, code fences and prose around the JSON and accepts a bare option name. Unknown options, unfinished reasoning and empty answers are rejected. Malformed router settings fail at agent startup.
+
+A routing model only classifies, so it can be much smaller and faster than the answer model: a 3–8B instruct model on the same GPU, or a separate Ollama instance, keeps the added latency low. Disable thinking for hybrid reasoning models (`ROUTER_EXTRA_BODY`), or the routing call spends its budget on reasoning.
+
+With `ROUTER_BACKEND=jev` and no Jev key for the request, routing fails with an actionable message. When routing fails or is turned off, the stored decision says `source: "answer_model"`; the answer model keeps both table and sandbox renderers and is told that no routing decision was made. Nothing claims the router decided. Authentication, missing-model, rate-limit and timeout errors are logged and never expose provider response bodies. Successful health checks confirm the server is running, not model access.
 
 Routing is a model judgment, not a guarantee of the objectively best visualization. Missing source data still requires clarification or explicit illustrative assumptions. Live provider checks and browser checks complement the deterministic routing, error-path, continuation, and A2UI rendering tests.
 

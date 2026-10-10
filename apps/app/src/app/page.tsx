@@ -18,7 +18,7 @@ export default function HomePage() {
   useGenerativeUIExamples();
   useExampleSuggestions();
   const { agent } = useAgent();
-  const { newChat, hasKeys, keysOpen, setKeysOpen } = useProviderKeys();
+  const { byok, newChat, hasKeys, keysOpen, setKeysOpen } = useProviderKeys();
   const { copilotkit } = useCopilotKit();
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
@@ -86,9 +86,9 @@ export default function HomePage() {
           <button type="button" onClick={newChat} disabled={agent.isRunning || retrying}>
             New chat
           </button>
-          <button type="button" onClick={() => setKeysOpen(true)} disabled={agent.isRunning || retrying} aria-haspopup="dialog">
+          {byok && <button type="button" onClick={() => setKeysOpen(true)} disabled={agent.isRunning || retrying} aria-haspopup="dialog">
             API keys{hasKeys ? " •" : ""}
-          </button>
+          </button>}
           <a
             href="https://github.com/CopilotKit/OpenIntelligentUI"
             target="_blank"
@@ -124,7 +124,7 @@ export default function HomePage() {
             >
               Retry answer
             </button>
-            <button type="button" className="provider-keys-recover" disabled={retrying || agent.isRunning} onClick={() => setKeysOpen(true)}>API keys</button>
+            {byok && <button type="button" className="provider-keys-recover" disabled={retrying || agent.isRunning} onClick={() => setKeysOpen(true)}>API keys</button>}
           </div>
         )}
         <div className="chat-content" ref={chatRoot}>
@@ -142,7 +142,7 @@ export default function HomePage() {
               welcomeMessageText: "What would you like to explore?",
               chatInputPlaceholder: "Ask anything…",
               chatDisclaimerText:
-                hasKeys ? "AI can make mistakes. Check important details." : "Add your OpenAI and Jev API keys to start. Keys clear when you refresh.",
+                hasKeys ? "AI can make mistakes. Check important details." : "Add your OpenAI API key (and optionally a Jev key) to start. Keys clear when you refresh.",
             }}
           />
         </div>

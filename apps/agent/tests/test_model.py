@@ -84,3 +84,82 @@ def test_missing_provider_key_has_actionable_error(monkeypatch, model, key, valu
         monkeypatch.setenv(key, value)
     with pytest.raises(ValueError, match=key):
         build_model()
+
+
+def test_compatible_endpoint_accepts_any_open_model_name(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:8000/v1")
+    monkeypatch.setenv("LLM_MODEL", "Qwen/Qwen3-Coder-30B-A3B-Instruct")
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_MAX_TOKENS", raising=False)
+    model = build_model()
+    assert isinstance(model, ChatOpenAI)
+    assert model.model_name == "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+    assert model.openai_api_base == "http://localhost:8000/v1"
+    assert model.openai_api_key.get_secret_value() == "EMPTY"
+    assert model.use_responses_api is False
+    # Unset so the server can use the remaining context for widget generation.
+    assert model.max_tokens is None
+
+
+def test_compatible_endpoint_options(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://litellm:4000/v1")
+    monkeypatch.setenv("LLM_MODEL", "gpt-oss-120b")
+    monkeypatch.setenv("LLM_API_KEY", "sk-litellm")
+    monkeypatch.setenv("LLM_MAX_TOKENS", "32000")
+    monkeypatch.setenv("LLM_EXTRA_BODY", '{"top_k": 20}')
+    model = build_model()
+    assert model.openai_api_key.get_secret_value() == "sk-litellm"
+    assert model.max_tokens == 32000
+    assert model.extra_body == {"top_k": 20}
+
+
+@pytest.mark.parametrize("raw", ["not json", "[1, 2]"])
+def test_compatible_endpoint_rejects_bad_extra_body(monkeypatch, raw):
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:8000/v1")
+    monkeypatch.setenv("LLM_MODEL", "local")
+    monkeypatch.setenv("LLM_EXTRA_BODY", raw)
+    with pytest.raises(ValueError, match="LLM_EXTRA_BODY"):
+        build_model()
+
+
+@pytest.mark.parametrize("value", [None, "  "])
+def test_compatible_endpoint_requires_model_name(monkeypatch, value):
+    # chat-latest must not be sent to a self-hosted server by default.
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:8000/v1")
+    if value is None:
+        monkeypatch.delenv("LLM_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("LLM_MODEL", value)
+    with pytest.raises(ValueError, match="LLM_BASE_URL"):
+        build_model()
+
+
+def test_credential_scoped_model_streams_each_chunk_once():
+    # The wrapper reports every chunk it yields; the inner (tool-bound) model must
+    # not report them again, or AG-UI streams duplicated text and tool-call deltas.
+    import asyncio
+
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+
+    from src.model import CredentialScopedModel
+
+    class ToolFake(GenericFakeChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self.bind(tools=tools)
+
+    inner = ToolFake(messages=iter([AIMessage(content="hello streaming world")]))
+    tool = {"type": "function", "function": {"name": "t", "parameters": {"type": "object", "properties": {}}}}
+    wrapped = CredentialScopedModel(fallback=inner).bind_tools([tool])
+
+    async def run():
+        names, text = [], []
+        async for event in wrapped.astream_events("hi", version="v2"):
+            if event["event"] == "on_chat_model_stream":
+                names.append(event["name"])
+                text.append(event["data"]["chunk"].content)
+        return names, "".join(text)
+
+    names, text = asyncio.run(run())
+    assert names and set(names) == {"CredentialScopedModel"}
+    assert text == "hello streaming world"

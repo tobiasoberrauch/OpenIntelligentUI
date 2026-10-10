@@ -13,6 +13,7 @@ function Harness({ disabled = false }: { disabled?: boolean }) {
     <button onClick={newChat}>New chat</button>
     <output data-testid="session">{session}</output>
     <output data-testid="active">{hasKeys ? headers?.["x-openai-api-key"] : "shared"}</output>
+    <output data-testid="jev">{headers?.["x-jev-api-key"] ?? "none"}</output>
     {open && <ProviderKeysDialog disabled={disabled} onClose={() => setOpen(false)} />}
   </>;
 }
@@ -23,26 +24,26 @@ function setup(disabled = false) {
 }
 function enterKeys() {
   fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "  openai-secret  " } });
-  fireEvent.change(screen.getByLabelText("Jev API key"), { target: { value: "  jev-secret  " } });
 }
 beforeEach(() => {
+  vi.stubEnv("NEXT_PUBLIC_BYOK", "true");
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true }) }));
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("memory-only provider keys", () => {
   it("validates trimmed headers before saving, resets the chat and never persists keys", async () => {
     const storage = vi.spyOn(Storage.prototype, "setItem");
     const cookie = vi.spyOn(document, "cookie", "set");
     setup();
-    expect(screen.getByRole("dialog")).toHaveAccessibleName("Add API keys to start");
+    expect(screen.getByRole("dialog")).toHaveAccessibleName("Add an API key to start");
     expect(screen.getByLabelText("OpenAI API key")).toHaveAttribute("type", "password");
     expect(screen.getByRole("button", { name: "Save keys" })).toBeDisabled();
     enterKeys();
     fireEvent.click(screen.getByText("Test connection"));
-    await screen.findByText("Both keys work. Save to start a new chat.");
-    expect(fetch).toHaveBeenCalledWith("/api/provider-keys", expect.objectContaining({ method: "POST", headers: { "x-openai-api-key": "openai-secret", "x-jev-api-key": "jev-secret" }, cache: "no-store" }));
+    await screen.findByText("Your keys work. Save to start a new chat.");
+    expect(fetch).toHaveBeenCalledWith("/api/provider-keys", expect.objectContaining({ method: "POST", headers: { "x-openai-api-key": "openai-secret" }, cache: "no-store" }));
     expect(screen.getByTestId("active")).toHaveTextContent("shared");
     fireEvent.click(screen.getByText("Save keys"));
     expect(screen.getByTestId("session")).toHaveTextContent("1");
@@ -72,13 +73,13 @@ describe("memory-only provider keys", () => {
 
   it("invalidates validation after edits and clears drafts on cancel with focus restored", async () => {
     setup(); enterKeys(); fireEvent.click(screen.getByText("Test connection"));
-    await screen.findByText("Both keys work. Save to start a new chat.");
-    fireEvent.change(screen.getByLabelText("Jev API key"), { target: { value: "new-secret" } });
+    await screen.findByText("Your keys work. Save to start a new chat.");
+    fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "new-secret" } });
     expect(screen.getByText("Save keys")).toBeDisabled();
     fireEvent.click(screen.getByText("Cancel"));
     expect(screen.getByText("Open keys")).toHaveFocus();
     fireEvent.click(screen.getByText("Open keys"));
-    expect(screen.getByLabelText("Jev API key")).toHaveValue("");
+    expect(screen.getByLabelText("OpenAI API key")).toHaveValue("");
   });
 
   it("disables credential changes during a run", () => {
@@ -93,8 +94,34 @@ describe("memory-only provider keys", () => {
     setup(); enterKeys(); fireEvent.click(screen.getByText("Test connection"));
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     const options = vi.mocked(fetch).mock.calls[0][1];
-    expect(screen.getByText("Checking both providers…")).toBeInTheDocument();
+    expect(screen.getByText("Checking your keys…")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Cancel"));
     expect(options?.signal?.aborted).toBe(true);
+  });
+
+  it("sends an optional Jev key alongside the OpenAI key", async () => {
+    setup();
+    enterKeys();
+    expect(screen.getByLabelText("Jev API key (optional)")).toHaveAttribute("type", "password");
+    fireEvent.change(screen.getByLabelText("Jev API key (optional)"), { target: { value: "  jev-secret  " } });
+    fireEvent.click(screen.getByText("Test connection"));
+    await screen.findByText("Your keys work. Save to start a new chat.");
+    expect(fetch).toHaveBeenCalledWith("/api/provider-keys", expect.objectContaining({ headers: { "x-openai-api-key": "openai-secret", "x-jev-api-key": "jev-secret" } }));
+    fireEvent.click(screen.getByText("Save keys"));
+    expect(screen.getByTestId("jev")).toHaveTextContent("jev-secret");
+  });
+
+  it("uses the server-side model without keys when BYOK is off", () => {
+    vi.stubEnv("NEXT_PUBLIC_BYOK", "false");
+    function Probe() {
+      const { byok, hasKeys, headers, setKeysOpen, keysOpen } = useProviderKeys();
+      return <>
+        <button onClick={() => setKeysOpen(true)}>Try open</button>
+        <output data-testid="state">{JSON.stringify({ byok, hasKeys, headers: headers ?? null, keysOpen })}</output>
+      </>;
+    }
+    render(<ProviderKeysProvider><Probe /></ProviderKeysProvider>);
+    fireEvent.click(screen.getByText("Try open"));
+    expect(JSON.parse(screen.getByTestId("state").textContent ?? "")).toEqual({ byok: false, hasKeys: true, headers: null, keysOpen: false });
   });
 });

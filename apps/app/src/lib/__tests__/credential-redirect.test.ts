@@ -25,7 +25,7 @@ it("never forwards credential headers to a redirected agent destination, includi
   try {
     const agent = buildRuntimeOptions({
       langgraphUrl: `http://127.0.0.1:${address.port}/`,
-      providerHeaders: { "x-openai-api-key": "visitor-key", "x-jev-api-key": "visitor-jev" },
+      providerHeaders: { "x-openai-api-key": "visitor-key" },
     }).agents.default;
     await expect(agent.clone().runAgent()).rejects.toThrow();
     expect(leakedRequests).toBe(0);

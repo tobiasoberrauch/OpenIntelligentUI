@@ -2,10 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 
-const headers = { "x-openai-api-key": "openai-test-secret", "x-jev-api-key": "jev-test-secret" };
+const headers = { "x-openai-api-key": "openai-test-secret" };
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 describe("provider key validation proxy", () => {
-  it("requires both keys before contacting the backend", async () => {
+  it("requires a key before contacting the backend", async () => {
     const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
     const response = await POST(new Request("http://localhost/api/provider-keys", { method: "POST" }));
     expect(response.status).toBe(400); expect(fetchMock).not.toHaveBeenCalled();
@@ -28,10 +28,22 @@ describe("provider key validation proxy", () => {
     expect(await response.text()).not.toContain("openai-test-secret");
     expect(response.status).toBe(400);
   });
+  it("provides a specific safe message for rejected OpenAI keys", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ code: "openai_invalid" }, { status: 401 })));
+    const response = await POST(new Request("http://localhost/api/provider-keys", { method: "POST", headers }));
+    expect((await response.json()).error).toContain("OpenAI could not validate");
+  });
   it("provides a specific safe message for rejected Jev keys", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ code: "jev_invalid" }, { status: 401 })));
+    const response = await POST(new Request("http://localhost/api/provider-keys", { method: "POST", headers: { ...headers, "x-jev-api-key": "jev-test-secret" } }));
+    const body = await response.text();
+    expect(body).toContain("Jev could not validate");
+    expect(body).not.toContain("jev-test-secret");
+  });
+  it("explains when the deployment requires a Jev key", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ code: "jev_required" }, { status: 400 })));
     const response = await POST(new Request("http://localhost/api/provider-keys", { method: "POST", headers }));
-    expect((await response.json()).error).toContain("Jev could not validate");
+    expect((await response.json()).error).toContain("Add your Jev API key");
   });
   it("does not expose fetch failures or credentials", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("headers: openai-test-secret")));

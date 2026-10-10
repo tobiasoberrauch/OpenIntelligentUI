@@ -2,8 +2,10 @@
 
 import { createContext, useContext, useState, type ReactNode } from "react";
 
-export type ProviderKeys = { openai: string; jev: string };
+export type ProviderKeys = { openai: string; jev?: string };
 type ProviderKeysContextValue = {
+  /** Visitors bring their own OpenAI key (NEXT_PUBLIC_BYOK=true). Off: the agent's server-side model is used. */
+  byok: boolean;
   headers: Record<string, string> | undefined;
   hasKeys: boolean;
   session: number;
@@ -17,21 +19,28 @@ type ProviderKeysContextValue = {
 };
 const ProviderKeysContext = createContext<ProviderKeysContextValue | null>(null);
 
+// Read at render time: Next.js inlines NEXT_PUBLIC_* at build time; tests can stub it.
+export function byokEnabled() {
+  return process.env.NEXT_PUBLIC_BYOK === "true";
+}
+
 export function ProviderKeysProvider({ children }: { children: ReactNode }) {
   // Deliberately memory-only: never put credentials in browser storage or agent state.
   const [keys, setKeys] = useState<ProviderKeys | null>(null);
   const [session, setSession] = useState(0);
   const [draft, setDraft] = useState("");
   const [keysOpen, setKeysOpen] = useState(false);
+  const byok = byokEnabled();
   const newChat = () => { setDraft(""); setSession((value) => value + 1); };
   return (
     <ProviderKeysContext.Provider value={{
-      headers: keys ? { "x-openai-api-key": keys.openai, "x-jev-api-key": keys.jev } : undefined,
-      hasKeys: keys !== null,
+      byok,
+      headers: byok && keys ? { "x-openai-api-key": keys.openai, ...(keys.jev ? { "x-jev-api-key": keys.jev } : {}) } : undefined,
+      hasKeys: !byok || keys !== null,
       session,
       save: (value) => { setKeys(value); setKeysOpen(false); setSession((value) => value + 1); },
       clear: () => { setKeys(null); newChat(); },
-      newChat, draft, setDraft, keysOpen, setKeysOpen,
+      newChat, draft, setDraft, keysOpen: byok && keysOpen, setKeysOpen,
     }}>
       {children}
     </ProviderKeysContext.Provider>

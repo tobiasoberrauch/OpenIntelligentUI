@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import type { ComponentProps } from "react";
@@ -21,12 +21,13 @@ function Harness() {
     <KeyGatedChatView key={session} onSubmitMessage={submit} onSelectSuggestion={select} />
     {keysOpen && <div role="dialog">
       <button onClick={() => setKeysOpen(false)}>Cancel</button>
-      <button onClick={() => save({ openai: "test", jev: "test" })}>Save tested keys</button>
+      <button onClick={() => save({ openai: "test" })}>Save tested keys</button>
     </div>}
     <button onClick={newChat}>New chat</button>
   </>;
 }
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+beforeEach(() => { vi.stubEnv("NEXT_PUBLIC_BYOK", "true"); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllEnvs(); });
 
 it("opens setup before sending and preserves the message across cancel and the key-save remount", () => {
   render(<ProviderKeysProvider><Harness /></ProviderKeysProvider>);
@@ -56,4 +57,13 @@ it("gates example prompts and clears the preserved draft when starting a new cha
   expect(screen.getByLabelText("Message")).toHaveValue("");
   fireEvent.click(screen.getByText("Example"));
   expect(select).toHaveBeenCalledOnce();
+});
+
+it("sends immediately when BYOK is off and the agent uses its server-side model", () => {
+  vi.stubEnv("NEXT_PUBLIC_BYOK", "false");
+  render(<ProviderKeysProvider><Harness /></ProviderKeysProvider>);
+  fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Show a map" } });
+  fireEvent.click(screen.getByText("Send"));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(submit).toHaveBeenCalledExactlyOnceWith("Show a map");
 });
