@@ -63,7 +63,7 @@ _3D plane · 4 seconds._
 
 ### Turn comparisons into charts
 
-Compare exact values in a table, then ask a follow-up to visualize the differences. Jev selects A2UI for basic tables and Open Generative UI for charts and more complex visuals.
+Compare exact values in a table, then ask a follow-up to visualize the differences. The visualization router selects A2UI for basic tables and Open Generative UI for charts and more complex visuals.
 
 <div align="center">
 
@@ -131,7 +131,7 @@ _Coastal map · 4 seconds._
 - **Find your kind of weekend** — compare trip ideas and adjust your preferences.
 - **Split the bill fairly** — change the total, tip, and group size in a working calculator.
 
-These starters run the agent; they are not prerecorded responses. Jev chooses the presentation, so outputs can vary. Map tiles and destination photos require network access. Streaming answers preserve your reading position, reveal text as it enters view, and show the copy action on hover or keyboard focus (always available on touch).
+These starters run the agent; they are not prerecorded responses. The router chooses the presentation, so outputs can vary. Map tiles and destination photos require network access. Streaming answers preserve your reading position, reveal text as it enters view, and show the copy action on hover or keyboard focus (always available on touch).
 
 <a id="run-locally"></a>
 
@@ -143,22 +143,24 @@ Prerequisites: Node.js 22+, pnpm 9+, Python 3.12+, and [uv](https://docs.astral.
 git clone https://github.com/CopilotKit/OpenIntelligentUI.git
 cd OpenIntelligentUI
 make setup
-# Optional: set shared OPENAI_API_KEY and TYPESAFE_API_KEY in apps/agent/.env
-# Or use API keys in the chat header after starting the app
+# Point apps/agent/.env at your model server (vLLM, Ollama, llama.cpp, LiteLLM …):
+#   LLM_BASE_URL=http://localhost:11434/v1
+#   LLM_MODEL=qwen3-coder-32k   (see docs/open-models.md)
+# or use OpenAI: remove LLM_BASE_URL, set LLM_MODEL=chat-latest and OPENAI_API_KEY
 make dev
 ```
 
 Open the [app](http://localhost:3000). The [agent health endpoint](http://localhost:8123/health) confirms the agent service is running. See [Getting started](docs/getting-started.md) for configuration and verification.
 
-The default model is `chat-latest`, OpenAI’s documented alias for the latest ChatGPT Instant model, requiring `OPENAI_API_KEY`. Jev (`jev-latest`, requiring `TYPESAFE_API_KEY`) selects the renderer and visualization for each user turn. Basic tables use A2UI; charts, diagrams, calculators, and maps use Open Generative UI. Provider failures are surfaced instead of silently substituting another router or model. See [Visualization routing](docs/visualization-routing.md).
+The answer model runs on any OpenAI-compatible server through `LLM_BASE_URL`, so open-weight models served by vLLM, SGLang, Ollama, llama.cpp or LiteLLM work without proprietary services; see [Open models](docs/open-models.md). Without `LLM_BASE_URL`, `chat-latest` (OpenAI) or `claude-*` (Anthropic) are used. A visualization router selects the renderer and visualization for each user turn with a structured-output request to the same or a smaller model. Basic tables use A2UI; charts, diagrams, calculators, and maps use Open Generative UI. If routing fails, the answer model chooses and the decision is recorded as its own (`ROUTER_ON_ERROR=fail` fails the turn instead). See [Visualization routing](docs/visualization-routing.md).
 
-## Use your own API keys
+## Use your own API key (optional)
 
-The chat asks for both keys before sending your first message or example prompt and keeps your draft while you set them up. Open **API keys** in the chat header, enter an OpenAI key and a Jev key, then choose **Test connection** and **Save keys**. The connection test makes a small request to each provider. Your keys use `chat-latest` for answers and `jev-latest` for visualization routing, with usage billed to your provider accounts.
+Bring-your-own-key is off by default: the chat uses the agent's server-side model. For public demos, build the frontend with `NEXT_PUBLIC_BYOK=true`. The chat then asks for an OpenAI key before sending your first message or example prompt and keeps your draft while you set it up. Open **API key** in the chat header, enter an OpenAI key, then choose **Test connection** and **Save key**. Your key uses `chat-latest` for answers and, unless the operator configured a self-hosted router endpoint, for visualization routing, with usage billed to your account.
 
-Keys stay in browser memory until refresh or **Clear keys**; the app does not save them in browser storage. Requests send them through the application server to their respective providers. They are kept out of chat state and checkpoints, and hosted LangSmith tracing is disabled for requests using your keys. Only use this feature on a deployment whose operator you trust. Saving or clearing keys starts a new chat; **New chat** keeps your keys for the current session.
+The key stays in browser memory until refresh or **Clear key**; the app does not save it in browser storage. Requests send it through the application server to OpenAI. It is kept out of chat state and checkpoints, and hosted LangSmith tracing is disabled for requests using your key. Only use this feature on a deployment whose operator you trust. Saving or clearing the key starts a new chat; **New chat** keeps your key for the current session.
 
-The agent can run without shared provider keys. Visitors must then supply both keys before chatting. Configured server credentials remain available to direct API clients that omit visitor keys; the chat interface requires visitors to add their own keys.
+With BYOK on, the agent can run without shared provider keys; configured server credentials remain available to direct API clients that omit visitor keys.
 
 ## How it works
 

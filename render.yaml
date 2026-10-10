@@ -23,14 +23,21 @@ services:
         sync: false
       - key: LANGSMITH_API_KEY
         sync: false
-      # chat-latest and gpt-* route via OpenAI, Claude names via Anthropic
-      # (see apps/agent/src/model.py)
+      # chat-latest and gpt-* route via OpenAI, Claude names via Anthropic;
+      # with LLM_BASE_URL any OpenAI-compatible server (see apps/agent/src/model.py)
       - key: LLM_MODEL
         value: chat-latest
-      - key: TYPESAFE_API_KEY
+      - key: LLM_BASE_URL
         sync: false
-      - key: JEV_MODEL
-        value: jev-latest
+      - key: LLM_API_KEY
+        sync: false
+      # Visualization router; defaults to the answer model endpoint
+      - key: ROUTER_BASE_URL
+        sync: false
+      - key: ROUTER_MODEL
+        sync: false
+      - key: ROUTER_API_KEY
+        sync: false
     buildFilter:
       paths:
         - apps/agent/**

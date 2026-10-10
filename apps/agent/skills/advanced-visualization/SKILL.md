@@ -7,7 +7,7 @@ allowed-tools: []
 # Interactive answer implementation
 
 Use this guidance after choosing a custom UI because it helps the task. Follow
-Jev’s renderer and visualization decision. A2UI handles basic tables; this sandbox
+the router’s renderer and visualization decision when one is given. A2UI handles basic tables; this sandbox
 handles charts, diagrams and custom interaction.
 Do not turn every answer into a dashboard. Use multiple sections when needed,
 including headings, assumptions, units, sources, and instructions inside the UI.

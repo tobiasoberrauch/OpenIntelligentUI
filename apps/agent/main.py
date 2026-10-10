@@ -14,15 +14,16 @@ from ag_ui_langgraph import add_langgraph_fastapi_endpoint
 from deepagents import create_deep_agent
 
 from src.anthropic_compat import ConsecutiveSystemMessagesMiddleware
+from src.openai_compat import SingleSystemMessageMiddleware
 from src.bounded_memory_saver import BoundedMemorySaver
-from src.model import build_model, RequestModelMiddleware, CredentialScopedModel
+from src.model import build_model, compatible_base_url, RequestModelMiddleware, CredentialScopedModel
 from src.credentials import (
     CredentialsMiddleware,
     CredentialScopedAgent,
     current_credentials,
     validate_credentials,
 )
-from src.visualization_router import JevVisualizationMiddleware
+from src.visualization_router import VisualizationRouterMiddleware
 from src.skill_backend import SKILL_SOURCES, build_agent_backend
 from src.query import query_data
 from src.todos import AgentState, todo_tools
@@ -39,8 +40,10 @@ agent = create_deep_agent(
     middleware=[
         RequestModelMiddleware(),
         CopilotKitMiddleware(),
-        JevVisualizationMiddleware(),
+        VisualizationRouterMiddleware(),
         ConsecutiveSystemMessagesMiddleware(),
+        # Many open-model chat templates accept only one leading system message.
+        *([SingleSystemMessageMiddleware()] if compatible_base_url() else []),
     ],
     context_schema=AgentState,
     skills=SKILL_SOURCES,

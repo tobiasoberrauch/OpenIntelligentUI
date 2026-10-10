@@ -2,13 +2,14 @@
 
 **Answers you can interact with**, by [CopilotKit](https://copilotkit.ai). The agent chooses text, native components, or custom interactive answers to help people understand, compare, and make tools.
 
-Local prerequisites: Node.js 22+, pnpm 9+, Python 3.12+, uv, an OpenAI key for the default `chat-latest` answer model, and a TypeSafe key for Jev visualization routing. `claude-*` overrides use Anthropic instead of OpenAI.
+Local prerequisites: Node.js 22+, pnpm 9+, Python 3.12+, uv, and either an OpenAI-compatible model server for open models (vLLM, Ollama, llama.cpp, LiteLLM) or an OpenAI key for the hosted `chat-latest` default. `claude-*` overrides use Anthropic instead of OpenAI.
 
 | Guide                                                | Description                                            |
 | ---------------------------------------------------- | ------------------------------------------------------ |
 | [Getting started](getting-started.md)                | Install, configure, and verify the project             |
 | [Product and agent behavior](interactive-answers.md) | Response selection, examples, evidence, and follow-ups |
-| [Visualization routing](visualization-routing.md) | Jev, A2UI tables, charts, diagrams, and maps |
+| [Open models](open-models.md)                        | Run answers and routing on vLLM, Ollama, llama.cpp     |
+| [Visualization routing](visualization-routing.md)    | Router, A2UI tables, charts, diagrams, and maps        |
 | [Architecture](architecture.md)                      | Agent, runtime, streaming renderer, and sandbox        |
 | [Deployment](deployment.md)                          | Configuration and launch verification                  |
 | [Bring to your app](bring-to-your-app.md)            | Adopt the integration patterns                         |

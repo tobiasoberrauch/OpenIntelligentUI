@@ -55,6 +55,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 function mockRuntime() {
@@ -134,6 +135,7 @@ function RuntimeReady() {
 }
 
 it("submits through the real chat-only page composer and preserves its message", async () => {
+  vi.stubEnv("NEXT_PUBLIC_BYOK", "true");
   const runInputs = mockRuntime();
   render(
     <Providers>
@@ -151,17 +153,38 @@ it("submits through the real chat-only page composer and preserves its message",
     key: "Enter",
     code: "Enter",
   });
-  expect(await screen.findByRole("dialog", { name: "Add API keys to start" })).toBeVisible();
+  expect(await screen.findByRole("dialog", { name: "Add an API key to start" })).toBeVisible();
   expect(runInputs).toHaveLength(0);
   fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "test-openai" } });
-  fireEvent.change(screen.getByLabelText("Jev API key"), { target: { value: "test-jev" } });
   fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-  await screen.findByText("Both keys work. Save to start a new chat.");
-  fireEvent.click(screen.getByRole("button", { name: "Save keys" }));
+  await screen.findByText("The key works. Save to start a new chat.");
+  fireEvent.click(screen.getByRole("button", { name: "Save key" }));
   await waitFor(() => expect(screen.getByTestId("runtime-status")).toHaveTextContent("connected"));
   expect(screen.getByRole("textbox")).toHaveValue("Explain bicycle gears");
   expect(runInputs).toHaveLength(0);
   fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", code: "Enter" });
   await waitFor(() => expect(runInputs).toHaveLength(1));
+  expect(await screen.findByText("Explain bicycle gears")).toBeVisible();
+});
+
+it("submits directly without a key dialog when BYOK is off", async () => {
+  vi.stubEnv("NEXT_PUBLIC_BYOK", "false");
+  const runInputs = mockRuntime();
+  render(
+    <Providers>
+      <RuntimeReady />
+      <HomePage />
+    </Providers>,
+  );
+  await waitFor(() =>
+    expect(screen.getByTestId("runtime-status")).toHaveTextContent("connected"),
+  );
+  expect(screen.queryByRole("button", { name: /API key/ })).not.toBeInTheDocument();
+  fireEvent.change(screen.getByRole("textbox"), {
+    target: { value: "Explain bicycle gears" },
+  });
+  fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", code: "Enter" });
+  await waitFor(() => expect(runInputs).toHaveLength(1));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(await screen.findByText("Explain bicycle gears")).toBeVisible();
 });

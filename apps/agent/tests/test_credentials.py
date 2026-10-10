@@ -14,15 +14,14 @@ def test_credentials_feature_exists():
 def test_headers_validate_without_disclosing_values():
     from src.credentials import parse_credentials
     assert parse_credentials([]) is None
-    keys = parse_credentials([(b'x-openai-api-key', b' openai-one '), (b'x-jev-api-key', b' jev-one ')])
+    keys = parse_credentials([(b'x-openai-api-key', b' openai-one ')])
     assert keys.openai == 'openai-one'
-    assert keys.jev == 'jev-one'
     assert 'openai-one' not in repr(keys)
     for value in [b'', b'foo bar', b'bad\nkey', b'\x80', b'a' * 4097]:
         with pytest.raises(ValueError, match='invalid_keys'):
-            parse_credentials([(b'x-openai-api-key', value), (b'x-jev-api-key', b'jev')])
+            parse_credentials([(b'x-openai-api-key', value)])
     with pytest.raises(ValueError):
-        parse_credentials([(b'x-openai-api-key', b'only')])
+        parse_credentials([(b'x-openai-api-key', b'one'), (b'X-OpenAI-API-Key', b'two')])
 
 
 def test_concurrent_streams_isolate_keys_and_reset_on_cancellation():
@@ -33,7 +32,7 @@ def test_concurrent_streams_isolate_keys_and_reset_on_cancellation():
         observed = []
         async def inner(scope, receive, send):
             nonlocal count
-            assert not any(k.startswith(b'x-openai') or k.startswith(b'x-jev') for k, _ in scope['headers'])
+            assert not any(k.startswith(b'x-openai') for k, _ in scope['headers'])
             count += 1
             if count == 2:
                 entered.set()
@@ -48,7 +47,7 @@ def test_concurrent_streams_isolate_keys_and_reset_on_cancellation():
             await send({'type': 'http.response.body', 'body': b'ok'})
         app = CredentialsMiddleware(inner)
         async def run(key):
-            scope = {'type': 'http', 'path': '/', 'headers': [(b'x-openai-api-key', key.encode()), (b'x-jev-api-key', b'jev')]}
+            scope = {'type': 'http', 'path': '/', 'headers': [(b'x-openai-api-key', key.encode())]}
             async def receive():
                 return {'type': 'http.disconnect'}
             async def send(message):
@@ -63,25 +62,30 @@ def test_concurrent_streams_isolate_keys_and_reset_on_cancellation():
     asyncio.run(exercise())
 
 
-def test_request_model_and_jev_override_without_environment_mutation(monkeypatch):
+def test_request_model_and_router_override_without_environment_mutation(monkeypatch):
     from src.credentials import Credentials, current_credentials
     from src.model import request_model
-    from src.visualization_router import request_options
+    from src.visualization_router import endpoint
+    for name in ['LLM_BASE_URL', 'ROUTER_BASE_URL', 'ROUTER_API_KEY', 'ROUTER_MODEL', 'LLM_MODEL']:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv('OPENAI_API_KEY', 'server-openai')
-    monkeypatch.setenv('TYPESAFE_API_KEY', 'server-jev')
-    monkeypatch.setenv('JEV_MODEL', 'server-model')
-    token = current_credentials.set(Credentials('visitor-openai', 'visitor-jev'))
+    token = current_credentials.set(Credentials('visitor-openai'))
     try:
         model = request_model(None)
         assert model.model_name == 'chat-latest'
         assert model.openai_api_key.get_secret_value() == 'visitor-openai'
-        assert request_options([])['headers']['Authorization'] == 'Bearer visitor-jev'
-        assert request_options([])['json']['model'] == 'jev-latest'
+        base_url, router_model, key, trust_env, _ = endpoint()
+        assert (base_url, router_model, key, trust_env) == ('https://api.openai.com/v1', 'chat-latest', 'visitor-openai', False)
         assert os.environ['OPENAI_API_KEY'] == 'server-openai'
+        # A self-hosted router stays server infrastructure, even for BYOK visitors.
+        monkeypatch.setenv('ROUTER_BASE_URL', 'http://router:8000/v1')
+        monkeypatch.setenv('ROUTER_MODEL', 'small-router')
+        assert endpoint()[:3] == ('http://router:8000/v1', 'small-router', '')
+        monkeypatch.delenv('ROUTER_BASE_URL')
+        monkeypatch.delenv('ROUTER_MODEL')
     finally:
         current_credentials.reset(token)
-    assert request_options([])['headers']['Authorization'] == 'Bearer server-jev'
-    assert request_options([])['json']['model'] == 'server-model'
+    assert endpoint()[2] == 'server-openai'
     sentinel = object()
     assert request_model(sentinel) is sentinel
 
@@ -98,7 +102,7 @@ def test_startup_without_credentials_uses_explicit_unconfigured_model(monkeypatc
 def test_thread_namespace_separates_credentials_and_fallback():
     from src.credentials import Credentials, current_credentials, private_thread_id
     ids = []
-    for creds in [None, Credentials('a', 'b'), Credentials('c', 'd')]:
+    for creds in [None, Credentials('a'), Credentials('c')]:
         token = current_credentials.set(creds)
         try:
             first = private_thread_id('same-thread')
@@ -110,18 +114,18 @@ def test_thread_namespace_separates_credentials_and_fallback():
     assert all('same-thread' not in value for value in ids)
 
 
-def test_validation_checks_both_providers_and_sanitizes_failure(monkeypatch):
+def test_validation_checks_openai_and_sanitizes_failure(monkeypatch):
     from src.credentials import Credentials, validate_credentials
     requests = []
     async def post(self, url, **kwargs):
         requests.append((url, kwargs))
         return httpx.Response(401, json={'error': 'SECRET visitor-openai'})
     monkeypatch.setattr(httpx.AsyncClient, 'post', post)
-    result = asyncio.run(validate_credentials(Credentials('visitor-openai', 'visitor-jev')))
+    result = asyncio.run(validate_credentials(Credentials('visitor-openai')))
     assert result.status_code == 401
     assert json.loads(result.body)['code'] == 'openai_invalid'
     assert 'SECRET' not in result.body.decode()
-    assert len(requests) == 2
+    assert len(requests) == 1
 
 
 def test_agent_stream_keeps_credentials_out_of_checkpoints_and_separates_threads():
@@ -143,7 +147,7 @@ def test_agent_stream_keeps_credentials_out_of_checkpoints_and_separates_threads
     adapter = CredentialScopedAgent(name='test', graph=builder.compile(checkpointer=saver))
     async def exercise():
         for index, key in enumerate(['visitor-first', 'visitor-second']):
-            token = current_credentials.set(Credentials(key, 'visitor-jev'))
+            token = current_credentials.set(Credentials(key))
             try:
                 input = RunAgentInput(thread_id='shared', run_id=f'run-{index}', messages=[{'id': f'message-{index}', 'role': 'user', 'content': 'Hello'}], state={}, tools=[], context=[], forwarded_props={})
                 events = [event async for event in adapter.clone().run(input)]
@@ -156,20 +160,35 @@ def test_agent_stream_keeps_credentials_out_of_checkpoints_and_separates_threads
     assert len(saver.storage) == 2
     persisted = repr((saver.storage, saver.writes, saver.blobs))
     # Message and run identifiers intentionally contain no credentials either.
-    assert all(secret not in persisted for secret in ['visitor-first', 'visitor-second', 'visitor-jev'])
+    assert all(secret not in persisted for secret in ['visitor-first', 'visitor-second'])
 
 
 def test_main_starts_without_server_credentials(monkeypatch):
     import subprocess
     import sys
-    environment = {k: v for k, v in os.environ.items() if k not in {'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'TYPESAFE_API_KEY', 'LLM_MODEL'}}
+    environment = {k: v for k, v in os.environ.items() if k not in {'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'LLM_MODEL', 'LLM_BASE_URL'}}
     environment['PYTHON_DOTENV_DISABLED'] = '1'
     result = subprocess.run([sys.executable, '-c', "from fastapi.testclient import TestClient; from main import app; c=TestClient(app); assert c.get('/health').status_code == 200; r=c.post('/', json={}); assert r.status_code == 401; assert r.json()['code'] == 'credentials_required'"], env=environment, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize(('statuses', 'code'), [([200, 200], None), ([200, 403], 'jev_invalid'), ([429, 200], 'provider_unavailable')])
-def test_validation_endpoint_results(monkeypatch, statuses, code):
+def test_main_starts_with_keyless_self_hosted_model():
+    import subprocess
+    import sys
+    environment = {k: v for k, v in os.environ.items() if k not in {'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'}}
+    environment.update({'PYTHON_DOTENV_DISABLED': '1', 'LLM_BASE_URL': 'http://127.0.0.1:9/v1', 'LLM_MODEL': 'local-model'})
+    script = (
+        "from main import agent; from src.credentials import server_credentials_available; "
+        "from langchain_openai import ChatOpenAI; assert server_credentials_available(); "
+        "from src.model import build_model; m = build_model(); "
+        "assert isinstance(m, ChatOpenAI) and m.model_name == 'local-model' and str(m.openai_api_base) == 'http://127.0.0.1:9/v1'"
+    )
+    result = subprocess.run([sys.executable, '-c', script], env=environment, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(('status', 'code'), [(200, None), (403, 'openai_invalid'), (429, 'provider_unavailable')])
+def test_validation_endpoint_results(monkeypatch, status, code):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from src.credentials import CredentialsMiddleware, current_credentials, validate_credentials
@@ -179,9 +198,9 @@ def test_validation_endpoint_results(monkeypatch, statuses, code):
     async def validate():
         return await validate_credentials(current_credentials.get())
     async def post(self, url, **kwargs):
-        return httpx.Response(statuses[0 if 'openai' in url else 1])
+        return httpx.Response(status)
     monkeypatch.setattr(httpx.AsyncClient, 'post', post)
-    response = TestClient(app).post('/credentials/validate', headers={'x-openai-api-key': 'openai', 'x-jev-api-key': 'jev'})
+    response = TestClient(app).post('/credentials/validate', headers={'x-openai-api-key': 'openai'})
     assert response.json() == ({'ok': False, 'code': code} if code else {'ok': True})
 
 
@@ -208,7 +227,7 @@ def test_actual_stream_disconnect_retains_then_releases_context():
         async def send(message):
             if message['type'] == 'http.response.body':
                 first_chunk.set()
-        scope = {'type': 'http', 'path': '/', 'asgi': {'spec_version': '2.0'}, 'headers': [(b'x-openai-api-key', b'visitor'), (b'x-jev-api-key', b'jev')]}
+        scope = {'type': 'http', 'path': '/', 'asgi': {'spec_version': '2.0'}, 'headers': [(b'x-openai-api-key', b'visitor')]}
         await CredentialsMiddleware(inner)(scope, receive, send)
         assert finalized.is_set()
         assert observed == ['visitor', 'visitor']
@@ -239,7 +258,7 @@ def test_internal_provider_errors_do_not_expose_upstream_content(monkeypatch):
             raise ValueError('upstream includes visitor-secret')
     failing = FailingModel(responses=[AIMessage(content='unused')])
     monkeypatch.setattr(models, 'request_model', lambda ignored: failing)
-    token = current_credentials.set(Credentials('visitor-secret', 'jev'))
+    token = current_credentials.set(Credentials('visitor-secret'))
     try:
         with pytest.raises(ValueError) as error:
             models.CredentialScopedModel(fallback=failing).invoke('summary')
@@ -261,7 +280,7 @@ def test_internal_streaming_errors_are_sanitized(monkeypatch):
     failing = FailingStream(responses=[AIMessage(content='unused')])
     monkeypatch.setattr(models, 'request_model', lambda ignored: failing)
     async def exercise():
-        token = current_credentials.set(Credentials('visitor-secret', 'jev'))
+        token = current_credentials.set(Credentials('visitor-secret'))
         try:
             wrapped = models.CredentialScopedModel(fallback=failing)
             with pytest.raises(ValueError) as error:
@@ -288,7 +307,7 @@ def test_byok_clients_ignore_server_openai_environment(monkeypatch):
     }
     for name, value in poison.items():
         monkeypatch.setenv(name, value)
-    token = current_credentials.set(Credentials('visitor-key', 'visitor-jev'))
+    token = current_credentials.set(Credentials('visitor-key'))
     try:
         model = request_model(None)
         for client in [model.root_client, model.root_async_client]:
@@ -325,7 +344,7 @@ def test_byok_clients_ignore_server_openai_environment(monkeypatch):
         current_credentials.reset(token)
 
 
-def test_byok_validation_and_jev_ignore_proxy_environment(monkeypatch):
+def test_byok_validation_and_router_ignore_proxy_environment(monkeypatch):
     from src.credentials import Credentials, current_credentials, validate_credentials
     from src.visualization_router import route, aroute
     observed = []
@@ -336,7 +355,9 @@ def test_byok_validation_and_jev_ignore_proxy_environment(monkeypatch):
         return post(self, url, **kwargs)
     monkeypatch.setattr(httpx.Client, 'post', post)
     monkeypatch.setattr(httpx.AsyncClient, 'post', apost)
-    creds = Credentials('visitor', 'jev')
+    for name in ['LLM_BASE_URL', 'ROUTER_BASE_URL']:
+        monkeypatch.delenv(name, raising=False)
+    creds = Credentials('visitor')
     asyncio.run(validate_credentials(creds))
     token = current_credentials.set(creds)
     try:
@@ -346,4 +367,4 @@ def test_byok_validation_and_jev_ignore_proxy_environment(monkeypatch):
             asyncio.run(aroute([]))
     finally:
         current_credentials.reset(token)
-    assert observed == [False, False, False, False]
+    assert observed == [False, False, False]

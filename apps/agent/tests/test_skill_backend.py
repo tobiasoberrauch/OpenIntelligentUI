@@ -79,7 +79,7 @@ def test_main_graph_discovers_skills_on_a_real_agent_turn(monkeypatch):
     import src.model
     import src.visualization_router
 
-    monkeypatch.setattr(src.visualization_router, "route", lambda context: {"renderer": "text", "visualization": "text", "confidence": 1, "source": "jev"})
+    monkeypatch.setattr(src.visualization_router, "route", lambda context: {"renderer": "text", "visualization": "text", "confidence": 1, "source": "router"})
 
     class ToolCapableFakeModel(FakeMessagesListChatModel):
         def bind_tools(self, tools, **kwargs):

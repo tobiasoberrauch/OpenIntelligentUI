@@ -29,7 +29,7 @@ Use the existing validated `Websandbox.connection.remote.sendPrompt({ text })` a
 
 ## Configuration and checks
 
-The local default model is `chat-latest` (ChatGPT Instant). `claude-*` requires `ANTHROPIC_API_KEY`; `chat-latest` and `gpt-*` require `OPENAI_API_KEY`. Jev routing requires `TYPESAFE_API_KEY`. Do not invent native model APIs or silently change pinned model IDs. See `render.yaml` for its separate explicit deployment model setting.
+`LLM_BASE_URL` selects any OpenAI-compatible server (vLLM, Ollama, llama.cpp, LiteLLM) and accepts any served `LLM_MODEL` name. Without it the default model is `chat-latest` (ChatGPT Instant); `claude-*` requires `ANTHROPIC_API_KEY`; `chat-latest` and `gpt-*` require `OPENAI_API_KEY`. Visualization routing uses the same endpoint unless `ROUTER_BASE_URL`/`ROUTER_MODEL` are set; `ROUTER_BACKEND=none` disables it. See `docs/open-models.md`. Do not invent native model APIs or silently change pinned model IDs. See `render.yaml` for its separate explicit deployment model setting.
 
 ```bash
 pnpm install

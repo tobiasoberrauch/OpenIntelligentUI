@@ -1,6 +1,5 @@
 """Ephemeral provider credentials, scoped to the complete ASGI stream lifetime."""
 
-import asyncio
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 import hashlib
@@ -17,11 +16,10 @@ from starlette.responses import JSONResponse
 @dataclass(frozen=True)
 class Credentials:
     openai: str = field(repr=False)
-    jev: str = field(repr=False)
 
 
 current_credentials: ContextVar[Credentials | None] = ContextVar('provider_credentials', default=None)
-SENSITIVE_HEADERS = {b'x-openai-api-key', b'x-jev-api-key'}
+SENSITIVE_HEADERS = {b'x-openai-api-key'}
 
 
 def parse_credentials(headers):
@@ -40,15 +38,17 @@ def parse_credentials(headers):
             values[name] = value.decode('ascii')
     if not values:
         return None
-    if len(values) != 2:
-        raise ValueError('invalid_keys')
-    return Credentials(values[b'x-openai-api-key'], values[b'x-jev-api-key'])
+    return Credentials(values[b'x-openai-api-key'])
 
 
 def server_credentials_available():
+    # Self-hosted OpenAI-compatible servers (vLLM, Ollama, llama.cpp …) often run
+    # without keys; the base URL is the server-side configuration.
+    if os.environ.get('LLM_BASE_URL', '').strip():
+        return True
     model = os.environ.get('LLM_MODEL', 'chat-latest').strip()
     key = 'ANTHROPIC_API_KEY' if model.startswith('claude-') else 'OPENAI_API_KEY'
-    return bool(os.environ.get(key, '').strip() and os.environ.get('TYPESAFE_API_KEY', '').strip())
+    return bool(os.environ.get(key, '').strip())
 
 
 class CredentialsMiddleware:
@@ -77,7 +77,7 @@ class CredentialsMiddleware:
 def private_thread_id(thread_id):
     credentials = current_credentials.get()
     if credentials:
-        key = hashlib.sha256(json.dumps([credentials.openai, credentials.jev]).encode()).digest()
+        key = hashlib.sha256(json.dumps([credentials.openai]).encode()).digest()
         namespace = 'byok'
     else:
         key = b'open-intelligent-ui-server-threads-v1'
@@ -97,8 +97,11 @@ class CredentialScopedAgent(LangGraphAGUIAgent):
 
 
 async def validate_credentials(credentials):
-    """Exercise both APIs; never forward their response bodies or exceptions."""
-    from src.visualization_router import JEV_URL, request_options
+    """Exercise the visitor's OpenAI key; never forward response bodies or exceptions.
+
+    The same key serves answers and (without a self-hosted router endpoint)
+    visualization routing, so one check covers both.
+    """
 
     async def check(provider, url, options):
         try:
@@ -112,18 +115,10 @@ async def validate_credentials(credentials):
             pass
         return 'provider_unavailable'
 
-    token = current_credentials.set(credentials)
-    try:
-        results = await asyncio.gather(
-            check('openai', 'https://api.openai.com/v1/chat/completions', {
-                'headers': {'Authorization': f'Bearer {credentials.openai}'},
-                'json': {'model': 'chat-latest', 'messages': [{'role': 'user', 'content': 'Reply OK.'}], 'max_completion_tokens': 8},
-            }),
-            check('jev', JEV_URL, request_options([{'role': 'human', 'content': 'Hello'}])),
-        )
-    finally:
-        current_credentials.reset(token)
-    error = next((result for result in results if result), None)
+    error = await check('openai', 'https://api.openai.com/v1/chat/completions', {
+        'headers': {'Authorization': f'Bearer {credentials.openai}'},
+        'json': {'model': 'chat-latest', 'messages': [{'role': 'user', 'content': 'Reply OK.'}], 'max_completion_tokens': 8},
+    })
     if error:
         return JSONResponse({'ok': False, 'code': error}, status_code=503 if error == 'provider_unavailable' else 401)
     return JSONResponse({'ok': True})

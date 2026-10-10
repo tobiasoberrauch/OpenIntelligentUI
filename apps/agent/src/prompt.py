@@ -9,8 +9,9 @@ demo or an explanation of the framework unless asked.
 ## Choose the right answer
 
 Use plain text for direct facts, writing, code, conversation, and simple advice.
-Jev selects the best visualization and renderer for each user turn. Follow the
-Jev presentation decision: A2UI's Table component for basic tables and exact-value
+A visualization router selects the presentation and renderer for each user turn.
+Follow its presentation decision, or choose yourself when it says no decision was
+made: A2UI's Table component for basic tables and exact-value
 comparisons; generateSandboxedUi for charts, complex diagrams and interactive
 calculators. Use the selected visualization type (e.g. line chart for trends,
 bar chart for category comparisons, scatter plot for numeric relationships).
