@@ -1,6 +1,6 @@
 # Open models
 
-Open Intelligent UI runs entirely on open components: CopilotKit, AG-UI, LangGraph/Deep Agents and A2UI are open source, and both model roles (the **answer model** and the **visualization router**) talk to any OpenAI-compatible chat-completions server. Nothing requires a proprietary API.
+Open Intelligent UI runs entirely on open components: CopilotKit, AG-UI, LangGraph/Deep Agents and A2UI are open source, and both model roles (the **answer model** and the **visualization router**) can talk to any OpenAI-compatible chat-completions server. Nothing requires a proprietary API; TypeSafe's Jev remains available as a routing backend (`ROUTER_BACKEND=jev`, or `auto` with `TYPESAFE_API_KEY`). To keep routing on your own infrastructure, leave `TYPESAFE_API_KEY` unset or set `ROUTER_BACKEND=llm`.
 
 | Role | Variables | What it needs |
 | --- | --- | --- |

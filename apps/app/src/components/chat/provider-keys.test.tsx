@@ -13,6 +13,7 @@ function Harness({ disabled = false }: { disabled?: boolean }) {
     <button onClick={newChat}>New chat</button>
     <output data-testid="session">{session}</output>
     <output data-testid="active">{hasKeys ? headers?.["x-openai-api-key"] : "shared"}</output>
+    <output data-testid="jev">{headers?.["x-jev-api-key"] ?? "none"}</output>
     {open && <ProviderKeysDialog disabled={disabled} onClose={() => setOpen(false)} />}
   </>;
 }
@@ -38,13 +39,13 @@ describe("memory-only provider keys", () => {
     setup();
     expect(screen.getByRole("dialog")).toHaveAccessibleName("Add an API key to start");
     expect(screen.getByLabelText("OpenAI API key")).toHaveAttribute("type", "password");
-    expect(screen.getByRole("button", { name: "Save key" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save keys" })).toBeDisabled();
     enterKeys();
     fireEvent.click(screen.getByText("Test connection"));
-    await screen.findByText("The key works. Save to start a new chat.");
+    await screen.findByText("Your keys work. Save to start a new chat.");
     expect(fetch).toHaveBeenCalledWith("/api/provider-keys", expect.objectContaining({ method: "POST", headers: { "x-openai-api-key": "openai-secret" }, cache: "no-store" }));
     expect(screen.getByTestId("active")).toHaveTextContent("shared");
-    fireEvent.click(screen.getByText("Save key"));
+    fireEvent.click(screen.getByText("Save keys"));
     expect(screen.getByTestId("session")).toHaveTextContent("1");
     expect(screen.getByTestId("active")).toHaveTextContent("openai-secret");
     fireEvent.click(screen.getByText("New chat"));
@@ -54,7 +55,7 @@ describe("memory-only provider keys", () => {
     expect(cookie).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText("Open keys"));
     expect(screen.getByLabelText("OpenAI API key")).toHaveValue("");
-    fireEvent.click(screen.getByText("Clear key"));
+    fireEvent.click(screen.getByText("Clear keys"));
     expect(screen.getByTestId("active")).toHaveTextContent("shared");
     expect(screen.getByTestId("session")).toHaveTextContent("3");
     cleanup();
@@ -66,15 +67,15 @@ describe("memory-only provider keys", () => {
     vi.mocked(fetch).mockResolvedValue({ ok: false, json: async () => ({ error: "OpenAI key could not be validated." }) } as Response);
     setup(); enterKeys(); fireEvent.click(screen.getByText("Test connection"));
     expect(await screen.findByRole("alert")).toHaveTextContent("OpenAI key could not be validated.");
-    expect(screen.getByText("Save key")).toBeDisabled();
+    expect(screen.getByText("Save keys")).toBeDisabled();
     expect(screen.getByTestId("active")).toHaveTextContent("shared");
   });
 
   it("invalidates validation after edits and clears drafts on cancel with focus restored", async () => {
     setup(); enterKeys(); fireEvent.click(screen.getByText("Test connection"));
-    await screen.findByText("The key works. Save to start a new chat.");
+    await screen.findByText("Your keys work. Save to start a new chat.");
     fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "new-secret" } });
-    expect(screen.getByText("Save key")).toBeDisabled();
+    expect(screen.getByText("Save keys")).toBeDisabled();
     fireEvent.click(screen.getByText("Cancel"));
     expect(screen.getByText("Open keys")).toHaveFocus();
     fireEvent.click(screen.getByText("Open keys"));
@@ -85,7 +86,7 @@ describe("memory-only provider keys", () => {
     setup(true);
     expect(screen.getByLabelText("OpenAI API key")).toBeDisabled();
     expect(screen.getByText("Test connection")).toBeDisabled();
-    expect(screen.getByText("Save key")).toBeDisabled();
+    expect(screen.getByText("Save keys")).toBeDisabled();
   });
 
   it("aborts pending validation when closed", async () => {
@@ -93,9 +94,21 @@ describe("memory-only provider keys", () => {
     setup(); enterKeys(); fireEvent.click(screen.getByText("Test connection"));
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     const options = vi.mocked(fetch).mock.calls[0][1];
-    expect(screen.getByText("Checking the provider…")).toBeInTheDocument();
+    expect(screen.getByText("Checking your keys…")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Cancel"));
     expect(options?.signal?.aborted).toBe(true);
+  });
+
+  it("sends an optional Jev key alongside the OpenAI key", async () => {
+    setup();
+    enterKeys();
+    expect(screen.getByLabelText("Jev API key (optional)")).toHaveAttribute("type", "password");
+    fireEvent.change(screen.getByLabelText("Jev API key (optional)"), { target: { value: "  jev-secret  " } });
+    fireEvent.click(screen.getByText("Test connection"));
+    await screen.findByText("Your keys work. Save to start a new chat.");
+    expect(fetch).toHaveBeenCalledWith("/api/provider-keys", expect.objectContaining({ headers: { "x-openai-api-key": "openai-secret", "x-jev-api-key": "jev-secret" } }));
+    fireEvent.click(screen.getByText("Save keys"));
+    expect(screen.getByTestId("jev")).toHaveTextContent("jev-secret");
   });
 
   it("uses the server-side model without keys when BYOK is off", () => {

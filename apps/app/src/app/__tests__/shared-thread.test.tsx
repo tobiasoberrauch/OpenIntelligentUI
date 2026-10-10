@@ -157,8 +157,8 @@ it("submits through the real chat-only page composer and preserves its message",
   expect(runInputs).toHaveLength(0);
   fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "test-openai" } });
   fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-  await screen.findByText("The key works. Save to start a new chat.");
-  fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+  await screen.findByText("Your keys work. Save to start a new chat.");
+  fireEvent.click(screen.getByRole("button", { name: "Save keys" }));
   await waitFor(() => expect(screen.getByTestId("runtime-status")).toHaveTextContent("connected"));
   expect(screen.getByRole("textbox")).toHaveValue("Explain bicycle gears");
   expect(runInputs).toHaveLength(0);

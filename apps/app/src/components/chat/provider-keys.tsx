@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, type ReactNode } from "react";
 
-export type ProviderKeys = { openai: string };
+export type ProviderKeys = { openai: string; jev?: string };
 type ProviderKeysContextValue = {
   /** Visitors bring their own OpenAI key (NEXT_PUBLIC_BYOK=true). Off: the agent's server-side model is used. */
   byok: boolean;
@@ -35,7 +35,7 @@ export function ProviderKeysProvider({ children }: { children: ReactNode }) {
   return (
     <ProviderKeysContext.Provider value={{
       byok,
-      headers: byok && keys ? { "x-openai-api-key": keys.openai } : undefined,
+      headers: byok && keys ? { "x-openai-api-key": keys.openai, ...(keys.jev ? { "x-jev-api-key": keys.jev } : {}) } : undefined,
       hasKeys: !byok || keys !== null,
       session,
       save: (value) => { setKeys(value); setKeysOpen(false); setSession((value) => value + 1); },

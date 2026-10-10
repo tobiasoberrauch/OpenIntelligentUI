@@ -9,7 +9,7 @@ Local prerequisites: Node.js 22+, pnpm 9+, Python 3.12+, uv, and either an OpenA
 | [Getting started](getting-started.md)                | Install, configure, and verify the project             |
 | [Product and agent behavior](interactive-answers.md) | Response selection, examples, evidence, and follow-ups |
 | [Open models](open-models.md)                        | Run answers and routing on vLLM, Ollama, llama.cpp     |
-| [Visualization routing](visualization-routing.md)    | Router, A2UI tables, charts, diagrams, and maps        |
+| [Visualization routing](visualization-routing.md)    | Jev or open router, A2UI tables, charts, maps          |
 | [Architecture](architecture.md)                      | Agent, runtime, streaming renderer, and sandbox        |
 | [Deployment](deployment.md)                          | Configuration and launch verification                  |
 | [Bring to your app](bring-to-your-app.md)            | Adopt the integration patterns                         |

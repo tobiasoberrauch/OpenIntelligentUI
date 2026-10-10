@@ -32,7 +32,14 @@ services:
         sync: false
       - key: LLM_API_KEY
         sync: false
-      # Visualization router; defaults to the answer model endpoint
+      # Visualization router: auto uses Jev when TYPESAFE_API_KEY is set,
+      # otherwise an OpenAI-compatible model (the answer model endpoint by default)
+      - key: ROUTER_BACKEND
+        value: auto
+      - key: TYPESAFE_API_KEY
+        sync: false
+      - key: JEV_MODEL
+        value: jev-latest
       - key: ROUTER_BASE_URL
         sync: false
       - key: ROUTER_MODEL

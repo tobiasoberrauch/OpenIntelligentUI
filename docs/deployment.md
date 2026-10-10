@@ -17,7 +17,9 @@ For shared credentials, the blueprint and Python factory default to `LLM_MODEL=c
 | ----------------------------------------- | ------------- | ----------------------------------------------------------------------------------- |
 | `LLM_MODEL`                               | Agent         | `claude-*` routes to Anthropic; `gpt-*` routes to OpenAI; any name with `LLM_BASE_URL` |
 | `LLM_BASE_URL` / `LLM_API_KEY`            | Agent         | OpenAI-compatible model server (vLLM, Ollama, llama.cpp, LiteLLM)                   |
-| `ROUTER_BASE_URL` / `ROUTER_MODEL` / `ROUTER_API_KEY` | Agent | Optional separate routing model; `ROUTER_BACKEND=none` disables routing  |
+| `ROUTER_BACKEND`                          | Agent         | `auto` (default), `jev`, `llm` or `none`; see [Visualization routing](visualization-routing.md) |
+| `TYPESAFE_API_KEY` / `JEV_MODEL`          | Agent         | Jev routing; `auto` selects Jev when the key is set                                 |
+| `ROUTER_BASE_URL` / `ROUTER_MODEL` / `ROUTER_API_KEY` | Agent | Optional separate OpenAI-compatible routing model                         |
 | `ANTHROPIC_API_KEY`                       | Agent         | Required when selecting Anthropic                                                   |
 | `OPENAI_API_KEY`                          | Agent         | Required when selecting OpenAI                                                      |
 | `LANGSMITH_API_KEY`                       | As configured | Optional tracing configuration                                                      |
@@ -25,7 +27,7 @@ For shared credentials, the blueprint and Python factory default to `LLM_MODEL=c
 | `RATE_LIMIT_ENABLED`                      | Frontend      | Defaults to `false` in blueprint                                                    |
 | `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX` | Frontend      | Request-limit configuration                                                         |
 | `MCP_SERVER_URL`                          | Frontend      | Optional MCP integration                                                            |
-| `NEXT_PUBLIC_BYOK`                        | Frontend      | `true` lets visitors bring an OpenAI key; build-time setting                        |
+| `NEXT_PUBLIC_BYOK`                        | Frontend      | `true` lets visitors bring an OpenAI key and optionally a Jev key; build-time setting |
 
 The agent rejects blank or unsupported model names at startup. A configured `LLM_BASE_URL` counts as server credentials. Otherwise missing shared provider keys allow a BYOK-only deployment (`NEXT_PUBLIC_BYOK=true`); requests without visitor keys receive a credentials-required response. Never put provider keys in public frontend variables.
 
@@ -35,9 +37,9 @@ Both services declare scaling from one to three instances. Agent checkpoints cur
 
 ## Visitor API keys
 
-With `NEXT_PUBLIC_BYOK=true`, visitors can supply an OpenAI key through **API key** in the chat header. The Next.js runtime forwards only `x-openai-api-key` to the configured agent, creating a separate runtime instance per request. The Python ASGI middleware strips this header before the inner application and scopes credentials to the entire streaming request without changing process environment variables. BYOK conversations have credential-specific checkpoint IDs, separate from shared-mode conversations.
+With `NEXT_PUBLIC_BYOK=true`, visitors can supply an OpenAI key and optionally a Jev key through **API keys** in the chat header. The Next.js runtime forwards only `x-openai-api-key` and `x-jev-api-key` to the configured agent, creating a separate runtime instance per request. A Jev key without an OpenAI key is rejected; visitor requests never fall back to the server's Jev key. With `ROUTER_BACKEND=jev`, the key check requires a visitor Jev key (`jev_required`); with `llm` or `none`, a visitor Jev key is neither checked nor used. The Python ASGI middleware strips these headers before the inner application and scopes credentials to the entire streaming request without changing process environment variables. BYOK conversations have credential-specific checkpoint IDs, separate from shared-mode conversations.
 
-`POST /api/provider-keys` proxies connection validation to the agent’s `POST /credentials/validate`. It performs small real provider requests and returns only fixed error messages. BYOK always uses the standard OpenAI endpoint and `chat-latest`; routing uses the visitor's key too unless a self-hosted `ROUTER_BASE_URL`/`LLM_BASE_URL` is configured, which stays server infrastructure. Hosted LangSmith tracing is disabled for BYOK. The application does not persist the keys, but its server necessarily receives them: use HTTPS externally and a trusted private or TLS connection between frontend and agent. Do not configure infrastructure to log credential headers.
+`POST /api/provider-keys` proxies connection validation to the agent’s `POST /credentials/validate`. It performs small real provider requests and returns only fixed error messages. BYOK always uses the standard OpenAI endpoint and `chat-latest`. Routing uses the visitor's Jev key with `jev-latest` when given; otherwise the visitor's OpenAI key, unless a self-hosted `ROUTER_BASE_URL`/`LLM_BASE_URL` is configured, which stays server infrastructure. Hosted LangSmith tracing is disabled for BYOK. The application does not persist the keys, but its server necessarily receives them: use HTTPS externally and a trusted private or TLS connection between frontend and agent. Do not configure infrastructure to log credential headers.
 
 ## Other hosts
 

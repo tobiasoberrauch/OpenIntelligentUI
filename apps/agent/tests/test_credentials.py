@@ -16,7 +16,16 @@ def test_headers_validate_without_disclosing_values():
     assert parse_credentials([]) is None
     keys = parse_credentials([(b'x-openai-api-key', b' openai-one ')])
     assert keys.openai == 'openai-one'
+    assert keys.jev is None
     assert 'openai-one' not in repr(keys)
+    both = parse_credentials([(b'x-openai-api-key', b'openai-two'), (b'x-jev-api-key', b' jev-two ')])
+    assert (both.openai, both.jev) == ('openai-two', 'jev-two')
+    assert 'jev-two' not in repr(both)
+    # A Jev key alone never falls back to the server's answer-model secrets.
+    with pytest.raises(ValueError, match='invalid_keys'):
+        parse_credentials([(b'x-jev-api-key', b'jev-only')])
+    with pytest.raises(ValueError, match='invalid_keys'):
+        parse_credentials([(b'x-openai-api-key', b'openai'), (b'x-jev-api-key', b'bad key')])
     for value in [b'', b'foo bar', b'bad\nkey', b'\x80', b'a' * 4097]:
         with pytest.raises(ValueError, match='invalid_keys'):
             parse_credentials([(b'x-openai-api-key', value)])
@@ -32,7 +41,7 @@ def test_concurrent_streams_isolate_keys_and_reset_on_cancellation():
         observed = []
         async def inner(scope, receive, send):
             nonlocal count
-            assert not any(k.startswith(b'x-openai') for k, _ in scope['headers'])
+            assert not any(k.startswith(b'x-openai') or k.startswith(b'x-jev') for k, _ in scope['headers'])
             count += 1
             if count == 2:
                 entered.set()
@@ -47,7 +56,7 @@ def test_concurrent_streams_isolate_keys_and_reset_on_cancellation():
             await send({'type': 'http.response.body', 'body': b'ok'})
         app = CredentialsMiddleware(inner)
         async def run(key):
-            scope = {'type': 'http', 'path': '/', 'headers': [(b'x-openai-api-key', key.encode())]}
+            scope = {'type': 'http', 'path': '/', 'headers': [(b'x-openai-api-key', key.encode()), (b'x-jev-api-key', b'jev')]}
             async def receive():
                 return {'type': 'http.disconnect'}
             async def send(message):
@@ -102,7 +111,7 @@ def test_startup_without_credentials_uses_explicit_unconfigured_model(monkeypatc
 def test_thread_namespace_separates_credentials_and_fallback():
     from src.credentials import Credentials, current_credentials, private_thread_id
     ids = []
-    for creds in [None, Credentials('a'), Credentials('c')]:
+    for creds in [None, Credentials('a'), Credentials('a', 'jev'), Credentials('c')]:
         token = current_credentials.set(creds)
         try:
             first = private_thread_id('same-thread')
@@ -110,7 +119,7 @@ def test_thread_namespace_separates_credentials_and_fallback():
             ids.append(first)
         finally:
             current_credentials.reset(token)
-    assert len(set(ids)) == 3
+    assert len(set(ids)) == 4
     assert all('same-thread' not in value for value in ids)
 
 
@@ -368,3 +377,43 @@ def test_byok_validation_and_router_ignore_proxy_environment(monkeypatch):
     finally:
         current_credentials.reset(token)
     assert observed == [False, False, False]
+
+
+@pytest.mark.parametrize(('statuses', 'code'), [([200, 200], None), ([200, 403], 'jev_invalid'), ([429, 200], 'provider_unavailable')])
+def test_validation_checks_optional_jev_key(monkeypatch, statuses, code):
+    from src.credentials import Credentials, validate_credentials
+    from src.visualization_router import JEV_URL
+    requests = []
+    async def post(self, url, **kwargs):
+        requests.append((url, kwargs['headers']['Authorization'], self.trust_env))
+        return httpx.Response(statuses[0 if 'openai' in url else 1])
+    monkeypatch.setattr(httpx.AsyncClient, 'post', post)
+    monkeypatch.setenv('TYPESAFE_API_KEY', 'server-jev')
+    result = asyncio.run(validate_credentials(Credentials('visitor-openai', 'visitor-jev')))
+    assert json.loads(result.body) == ({'ok': False, 'code': code} if code else {'ok': True})
+    assert sorted(requests) == sorted([
+        ('https://api.openai.com/v1/chat/completions', 'Bearer visitor-openai', False),
+        (JEV_URL, 'Bearer visitor-jev', False),
+    ])
+
+
+@pytest.mark.parametrize(('backend', 'jev', 'expected', 'jev_checked'), [
+    ('jev', None, {'ok': False, 'code': 'jev_required'}, False),
+    ('jev', 'visitor-jev', {'ok': True}, True),
+    ('llm', 'visitor-jev', {'ok': True}, False),
+    ('none', 'visitor-jev', {'ok': True}, False),
+    ('auto', None, {'ok': True}, False),
+])
+def test_validation_follows_router_backend(monkeypatch, backend, jev, expected, jev_checked):
+    from src.credentials import Credentials, validate_credentials
+    from src.visualization_router import JEV_URL
+    urls = []
+    async def post(self, url, **kwargs):
+        urls.append(url)
+        return httpx.Response(200)
+    monkeypatch.setattr(httpx.AsyncClient, 'post', post)
+    monkeypatch.setenv('ROUTER_BACKEND', backend)
+    result = asyncio.run(validate_credentials(Credentials('visitor-openai', jev)))
+    assert json.loads(result.body) == expected
+    assert (JEV_URL in urls) == jev_checked
+

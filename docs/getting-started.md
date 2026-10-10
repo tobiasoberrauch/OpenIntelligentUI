@@ -14,7 +14,7 @@ make setup
 
 ## Configure the agent
 
-Edit `apps/agent/.env`. For open models, point the agent at any OpenAI-compatible server; the visualization router uses the same endpoint unless you give it its own:
+Edit `apps/agent/.env`. For open models, point the agent at any OpenAI-compatible server; the visualization router uses the same endpoint unless you give it its own, or TypeSafe's Jev when `TYPESAFE_API_KEY` is set:
 
 ```dotenv
 LLM_BASE_URL=http://localhost:11434/v1   # Ollama; vLLM: http://localhost:8000/v1
@@ -27,9 +27,9 @@ See [Open models](open-models.md) for vLLM, Ollama and llama.cpp setups, model r
 
 For hosted providers, remove `LLM_BASE_URL`: the model factory accepts `claude-*` names through Anthropic and `chat-latest` or `gpt-*` names through OpenAI. Set a model available to your account in `LLM_MODEL` and supply its provider key (`OPENAI_API_KEY` also serves routing). Unset `LLM_MODEL` uses the local default; an empty value or unsupported prefix fails with a configuration error.
 
-For public demos, build the frontend with `NEXT_PUBLIC_BYOK=true`: visitors then test and save their own OpenAI key under **API key** in the chat header for the current browser session. Refreshing clears the key.
+For public demos, build the frontend with `NEXT_PUBLIC_BYOK=true`: visitors then test and save their own OpenAI key, and optionally a Jev key, under **API keys** in the chat header for the current browser session. Refreshing clears the keys.
 
-Check model availability and access with a real request. This repository does not guarantee that every model name works or implement a separate native GPT-6 API. Never put shared provider keys in public frontend environment variables. See [BYOK behavior](../README.md#use-your-own-api-key-optional).
+Check model availability and access with a real request. This repository does not guarantee that every model name works or implement a separate native GPT-6 API. Never put shared provider keys in public frontend environment variables. See [BYOK behavior](../README.md#use-your-own-api-keys-optional).
 
 ## Configure the frontend
 
@@ -39,7 +39,7 @@ Optional settings belong in `apps/app/.env.local` or the frontend process enviro
 | -------------------------- | ----------------------- | ------------------------- |
 | `LANGGRAPH_DEPLOYMENT_URL` | `http://localhost:8123` | Agent URL                 |
 | `MCP_SERVER_URL`           | Unset                   | Optional MCP integration  |
-| `NEXT_PUBLIC_BYOK`         | Unset (off)             | Visitors bring an OpenAI key; read at build time |
+| `NEXT_PUBLIC_BYOK`         | Unset (off)             | Visitors bring an OpenAI key (and optionally a Jev key); read at build time |
 | `RATE_LIMIT_ENABLED`       | `false`                 | Per-IP runtime rate limit |
 | `RATE_LIMIT_WINDOW_MS`     | `60000`                 | Rate-limit window         |
 | `RATE_LIMIT_MAX`           | `40`                    | Requests per window       |

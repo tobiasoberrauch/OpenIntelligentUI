@@ -3,6 +3,8 @@ import { readProviderHeaders, PROVIDER_KEY_INPUT_ERROR } from "@/lib/provider-ke
 
 const errors: Record<string, string> = {
   openai_invalid: "OpenAI could not validate this key for the answer model. Check its permissions and model access.",
+  jev_invalid: "Jev could not validate this key. Check your Jev API key and account access, or leave it empty.",
+  jev_required: "This deployment chooses visualizations with Jev. Add your Jev API key.",
   provider_unavailable: "A provider is unavailable or rate limited. Please try again shortly.",
   invalid_keys: PROVIDER_KEY_INPUT_ERROR,
 };
@@ -32,8 +34,8 @@ export async function POST(request: Request) {
     if (response.ok && data?.ok === true) return reply({ ok: true }, 200);
     // Never relay arbitrary provider bodies: they can contain sensitive data.
     const error = typeof data?.code === "string" ? errors[data.code] : undefined;
-    return reply({ error: error ?? "The agent could not validate your key. Please try again." }, 400);
+    return reply({ error: error ?? "The agent could not validate your keys. Please try again." }, 400);
   } catch {
-    return reply({ error: "Could not reach the agent to validate your key. Please try again." }, 502);
+    return reply({ error: "Could not reach the agent to validate your keys. Please try again." }, 502);
   }
 }

@@ -30,6 +30,8 @@ ROUTER_ENV = [
     "OPENAI_BASE_URL",
     "OPENAI_API_BASE",
     "ROUTER_TIMEOUT",
+    "TYPESAFE_API_KEY",
+    "JEV_MODEL",
 ]
 
 
@@ -360,7 +362,7 @@ def test_backend_none_skips_the_router_call(monkeypatch):
 @pytest.mark.parametrize(
     ("name", "value"),
     [
-        ("ROUTER_BACKEND", "jev"),
+        ("ROUTER_BACKEND", "typesafe"),
         ("ROUTER_ON_ERROR", "ignore"),
         ("ROUTER_TIMEOUT", "soon"),
         ("ROUTER_MAX_TOKENS", "0"),
@@ -509,3 +511,188 @@ def test_idless_continuation_has_stable_turn_key():
     assert routing_input(state) is None
     state["messages"].append(HumanMessage(content="table"))
     assert routing_input(state)[0] != turn
+
+
+# ── Jev backend and auto selection ───────────────────────────────────────────
+
+
+def jev_response(choice, confidence=0.9):
+    return {
+        "answers": {
+            "visualization": {
+                "type": "choice",
+                "choice": choice,
+                "confidence": confidence,
+                "probabilities": {choice: confidence},
+            }
+        }
+    }
+
+
+def with_credentials(credentials):
+    from contextlib import contextmanager
+
+    from src.credentials import current_credentials
+
+    @contextmanager
+    def scope():
+        token = current_credentials.set(credentials)
+        try:
+            yield
+        finally:
+            current_credentials.reset(token)
+
+    return scope()
+
+
+@pytest.mark.parametrize(
+    ("server_jev", "credentials", "backend"),
+    [
+        (False, None, "llm"),
+        (True, None, "jev"),
+        (True, ("visitor-openai", None), "llm"),  # BYOK never spends the server's Jev key
+        (False, ("visitor-openai", "visitor-jev"), "jev"),
+    ],
+)
+def test_auto_prefers_jev_only_when_a_jev_key_belongs_to_the_caller(monkeypatch, server_jev, credentials, backend):
+    from src.credentials import Credentials
+
+    if server_jev:
+        monkeypatch.setenv("TYPESAFE_API_KEY", "server-jev")
+    with with_credentials(Credentials(*credentials) if credentials else None):
+        assert router.active_backend() == backend
+
+
+@pytest.mark.parametrize("backend", ["jev", "llm", "none"])
+def test_explicit_backend_wins_over_auto(monkeypatch, backend):
+    monkeypatch.setenv("ROUTER_BACKEND", backend)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "server-jev")
+    assert router.active_backend() == backend
+
+
+@pytest.mark.parametrize(
+    ("choice", "renderer"),
+    [("table", "a2ui"), ("line_chart", "open_generative_ui"), ("map", "open_generative_ui"), ("text", "text")],
+)
+def test_jev_decisions_map_to_exact_renderer(choice, renderer):
+    decision = router.jev_decision(jev_response(choice))
+    assert decision["renderer"] == renderer
+    assert decision["source"] == "jev"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {},
+        jev_response("invented"),
+        {"answers": {"visualization": {"choice": "table"}}},
+        jev_response("table", confidence=1.5),
+        {"answers": {"visualization": {"type": "choice", "choice": "table", "confidence": 0.9, "probabilities": {"invented": 0.1}}}},
+    ],
+)
+def test_bad_jev_decisions_fail_loudly(raw):
+    with pytest.raises(RouterError, match="Jev"):
+        router.jev_decision(raw)
+
+
+def test_jev_route_uses_server_key_and_model(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "server-jev")
+    monkeypatch.setenv("JEV_MODEL", "jev-pinned")
+    seen = []
+
+    def post(self, url, headers=None, json=None):
+        seen.append((url, headers, json, self.trust_env))
+        return httpx.Response(200, json=jev_response("bar_chart"))
+
+    monkeypatch.setattr(httpx.Client, "post", post)
+    decision = router.route([{"role": "human", "content": "Compare regions"}])
+    assert decision["visualization"] == "bar_chart" and decision["source"] == "jev"
+    url, headers, payload, trust_env = seen[0]
+    assert url == router.JEV_URL
+    assert headers == {"Authorization": "Bearer server-jev"}
+    assert payload["model"] == "jev-pinned"
+    assert payload["state"]["conversation"][0]["content"] == "Compare regions"
+    assert payload["questions"]["visualization"]["criteria"] == router.VISUALIZATIONS
+    assert trust_env is True
+
+
+def test_jev_route_with_byok_uses_visitor_key_without_proxy_env(monkeypatch):
+    from src.credentials import Credentials
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "server-jev")
+    monkeypatch.setenv("JEV_MODEL", "jev-pinned")
+    seen = []
+
+    async def post(self, url, headers=None, json=None):
+        seen.append((headers, json["model"], self.trust_env))
+        return httpx.Response(200, json=jev_response("table"))
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    import asyncio
+
+    with with_credentials(Credentials("visitor-openai", "visitor-jev")):
+        assert asyncio.run(router.aroute([]))["source"] == "jev"
+    assert seen == [({"Authorization": "Bearer visitor-jev"}, "jev-latest", False)]
+
+
+def test_explicit_jev_without_any_key_is_actionable(monkeypatch):
+    monkeypatch.setenv("ROUTER_BACKEND", "jev")
+    with pytest.raises(RouterError, match="TYPESAFE_API_KEY"):
+        router.route([])
+
+
+def test_explicit_jev_for_byok_visitor_without_jev_key_does_not_use_server_key(monkeypatch):
+    from src.credentials import Credentials
+
+    monkeypatch.setenv("ROUTER_BACKEND", "jev")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "server-jev")
+    monkeypatch.setattr(httpx.Client, "post", lambda *a, **k: pytest.fail("server Jev key used"))
+    with with_credentials(Credentials("visitor-openai")):
+        with pytest.raises(RouterError, match="Jev API key"):
+            router.route([])
+
+
+def test_jev_errors_do_not_expose_response_body(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "server-jev")
+    monkeypatch.setattr(httpx.Client, "post", lambda *a, **k: httpx.Response(401, text="sensitive provider details"))
+    with pytest.raises(RouterError, match="HTTP 401") as error:
+        router.route([])
+    assert "sensitive" not in str(error.value)
+
+
+def test_jev_timeout_is_actionable_without_secret(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "private-test-value")
+
+    def timeout(*args, **kwargs):
+        raise httpx.ReadTimeout("private-test-value")
+
+    monkeypatch.setattr(httpx.Client, "post", timeout)
+    with pytest.raises(RouterError, match="timed out") as error:
+        router.route([])
+    assert "private-test-value" not in str(error.value)
+
+
+def test_jev_failure_falls_back_to_answer_model(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "server-jev")
+    monkeypatch.setattr(httpx.Client, "post", lambda *a, **k: httpx.Response(503))
+    middleware = router.VisualizationRouterMiddleware()
+    update = middleware.before_agent({"messages": [HumanMessage(content="hi", id="one")]}, None)
+    assert update["visualization_decision"] == AUTO_DECISION
+
+
+@pytest.mark.parametrize("bad", [["bar_chart"], {"a": 1}, 3, None])
+def test_non_string_choices_fall_back_instead_of_crashing(monkeypatch, bad):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "server-jev")
+    body = {"answers": {"visualization": {"type": "choice", "choice": bad, "confidence": 0.5, "probabilities": {}}}}
+    monkeypatch.setattr(httpx.Client, "post", lambda *a, **k: httpx.Response(200, json=body))
+    middleware = router.VisualizationRouterMiddleware()
+    update = middleware.before_agent({"messages": [HumanMessage(content="hi", id="one")]}, None)
+    assert update["visualization_decision"] == AUTO_DECISION
+    with pytest.raises(RouterError):
+        parse_decision(json.dumps({"visualization": bad, "confidence": 1}))
+
+
+def test_non_dict_jev_answer_is_invalid():
+    with pytest.raises(RouterError, match="Jev"):
+        router.jev_decision({"answers": {"visualization": "table"}})
+
