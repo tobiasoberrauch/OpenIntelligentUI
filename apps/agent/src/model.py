@@ -60,10 +60,11 @@ def build_compatible_model(model_name: str, base_url: str) -> BaseChatModel:
 
 
 def build_model(*, allow_unconfigured: bool = False) -> BaseChatModel:
-    model_name = os.environ.get("LLM_MODEL", DEFAULT_MODEL).strip()
     base_url = compatible_base_url()
     if base_url:
-        return build_compatible_model(model_name, base_url)
+        # No default here: chat-latest means nothing to a self-hosted server.
+        return build_compatible_model(os.environ.get("LLM_MODEL", "").strip(), base_url)
+    model_name = os.environ.get("LLM_MODEL", DEFAULT_MODEL).strip()
     is_openai = model_name == "chat-latest" or model_name.startswith("gpt-")
     if not is_openai and not model_name.startswith("claude-"):
         raise ValueError(

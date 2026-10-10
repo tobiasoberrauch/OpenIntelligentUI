@@ -29,7 +29,7 @@ For hosted providers, remove `LLM_BASE_URL`: the model factory accepts `claude-*
 
 For public demos, build the frontend with `NEXT_PUBLIC_BYOK=true`: visitors then test and save their own OpenAI key under **API key** in the chat header for the current browser session. Refreshing clears the key.
 
-Check model availability and access with a real request. This repository does not guarantee that every model name works or implement a separate native GPT-6 API. Never put shared provider keys in public frontend environment variables. See [BYOK behavior](../README.md#use-your-own-api-keys).
+Check model availability and access with a real request. This repository does not guarantee that every model name works or implement a separate native GPT-6 API. Never put shared provider keys in public frontend environment variables. See [BYOK behavior](../README.md#use-your-own-api-key-optional).
 
 ## Configure the frontend
 

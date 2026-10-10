@@ -88,6 +88,7 @@ RESPONSE_FORMATS = (
 )
 _format_index: dict[tuple[str, str], int] = {}
 FORMAT_REJECTIONS = {400, 415, 422, 500, 501}
+DEFINITIVE_REJECTIONS = {400, 415, 422, 501}
 
 
 class RoutingState(AgentState):
@@ -108,6 +109,35 @@ def router_backend() -> str:
     if backend not in {"llm", "none"}:
         raise ValueError("ROUTER_BACKEND must be 'llm' or 'none'.")
     return backend
+
+
+def on_error() -> str:
+    value = (env("ROUTER_ON_ERROR") or "auto").lower()
+    if value not in {"auto", "fail"}:
+        raise ValueError("ROUTER_ON_ERROR must be 'auto' or 'fail'.")
+    return value
+
+
+def positive_number(name: str, default: float, kind=float):
+    raw = env(name)
+    if not raw:
+        return kind(default)
+    try:
+        value = kind(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive number.")
+    return value
+
+
+def validate_config() -> None:
+    """Fail at startup on malformed router settings instead of on every turn."""
+    router_backend()
+    on_error()
+    positive_number("ROUTER_MAX_TOKENS", 512, int)
+    positive_number("ROUTER_TIMEOUT", 30)
+    extra_body()
 
 
 def renderer_for(visualization: str) -> str:
@@ -143,7 +173,8 @@ def parse_decision(content: str) -> dict:
     """
     if not isinstance(content, str):
         raise RouterError("The router returned an invalid visualization decision. Please retry.")
-    text = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+    # Unterminated <think> means the budget ended mid-reasoning: drop it all.
+    text = re.sub(r"<think>.*?(?:</think>|\Z)", "", content, flags=re.DOTALL).strip()
     for candidate in [text, *re.findall(r"\{[^{}]*\}", text)]:
         try:
             raw = json.loads(candidate)
@@ -213,9 +244,11 @@ def endpoint():
     from src.credentials import current_credentials
 
     credentials = current_credentials.get()
-    base_url = env("ROUTER_BASE_URL") or env("LLM_BASE_URL")
+    router_url, llm_url = env("ROUTER_BASE_URL"), env("LLM_BASE_URL")
+    base_url = router_url or llm_url
     if base_url:
-        key = env("ROUTER_API_KEY") or env("LLM_API_KEY")
+        # LLM_API_KEY belongs to LLM_BASE_URL; never send it to a separate router host.
+        key = env("ROUTER_API_KEY") if router_url else env("ROUTER_API_KEY") or env("LLM_API_KEY")
         model = env("ROUTER_MODEL") or env("LLM_MODEL")
         if not model:
             raise RouterError(
@@ -235,8 +268,12 @@ def endpoint():
             "Set ROUTER_MODEL and ROUTER_BASE_URL for routing, or ROUTER_BACKEND=none, "
             "when the answer model is a Claude model."
         )
-    # BYOK keys must not travel through server proxy settings (trust_env=False).
-    return OPENAI_BASE_URL, model, key, credentials is None, True
+    if credentials:
+        # BYOK keys go only to OpenAI and never through server proxy settings.
+        return OPENAI_BASE_URL, model, key, False, True
+    # Server keys follow the same OpenAI base URL override as the answer model.
+    server_url = env("OPENAI_BASE_URL") or env("OPENAI_API_BASE") or OPENAI_BASE_URL
+    return server_url.rstrip("/"), model, key, True, True
 
 
 def extra_body() -> dict:
@@ -268,7 +305,7 @@ def request_payload(context, model: str, response_format, openai_cloud: bool) ->
             },
         ],
     }
-    max_tokens = int(env("ROUTER_MAX_TOKENS") or 512)
+    max_tokens = positive_number("ROUTER_MAX_TOKENS", 512, int)
     if openai_cloud:
         # OpenAI's reasoning/instant aliases reject max_tokens and custom temperature.
         payload["max_completion_tokens"] = max_tokens
@@ -288,9 +325,14 @@ def response_content(response: httpx.Response) -> str:
         raise RouterError("The router returned an invalid response. Please retry.") from None
     if not isinstance(message, dict):
         raise RouterError("The router returned an invalid response. Please retry.")
-    # Some reasoning servers leave content empty and put the answer into
-    # reasoning_content when the budget ends early; try it before failing.
-    return message.get("content") or message.get("reasoning_content") or message.get("reasoning") or ""
+    content = message.get("content")
+    if not content:
+        # Reasoning servers return empty content when the budget ends mid-thought.
+        # Reasoning text is not a decision; fall back instead of guessing from it.
+        raise RouterError(
+            "The router returned no decision. Raise ROUTER_MAX_TOKENS or disable thinking for the routing model."
+        )
+    return content
 
 
 class _Attempts:
@@ -300,7 +342,10 @@ class _Attempts:
         self.base_url, self.model, self.key, self.trust_env, self.openai_cloud = endpoint()
         self.context = context
         self.cache_key = (self.base_url, self.model)
-        self.timeout = float(env("ROUTER_TIMEOUT") or 30)
+        self.timeout = positive_number("ROUTER_TIMEOUT", 30)
+        # Only definitive rejections may downgrade the remembered format; a 500
+        # can be transient, so it degrades this request but is not remembered.
+        self.remember = True
         self.url = f"{self.base_url}/chat/completions"
         self.headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
 
@@ -316,6 +361,8 @@ class _Attempts:
         # Ollama answer 400, FastAPI-based servers 422, llama-cpp-python 500.
         # Auth, missing-model and rate-limit errors are never format problems.
         if response.status_code in FORMAT_REJECTIONS and index + 1 < len(RESPONSE_FORMATS):
+            if response.status_code not in DEFINITIVE_REJECTIONS:
+                self.remember = False
             return None
         if not response.is_success:
             # Never echo provider bodies: they can contain request details.
@@ -323,7 +370,8 @@ class _Attempts:
                 f"Visualization routing failed (HTTP {response.status_code}). "
                 "Check the router endpoint, model name and access, or retry."
             )
-        _format_index[self.cache_key] = index
+        if self.remember:
+            _format_index[self.cache_key] = index
         return parse_decision(response_content(response))
 
 
@@ -360,7 +408,7 @@ async def aroute(context):
 
 def fallback(error: Exception) -> dict:
     """Let the answer model choose when routing fails, unless ROUTER_ON_ERROR=fail."""
-    if (env("ROUTER_ON_ERROR") or "auto").lower() == "fail":
+    if on_error() == "fail":
         raise error
     logger.warning("Visualization routing failed; the answer model will choose: %s", error)
     return dict(AUTO_DECISION)
@@ -405,6 +453,10 @@ def routed_request(request):
 
 class VisualizationRouterMiddleware(AgentMiddleware):
     state_schema = RoutingState
+
+    def __init__(self):
+        super().__init__()
+        validate_config()
 
     def before_agent(self, state, runtime):
         pending = routing_input(state)

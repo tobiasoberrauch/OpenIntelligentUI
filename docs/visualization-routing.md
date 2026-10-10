@@ -24,13 +24,13 @@ The A2UI catalog supplies a semantic HTML table with column headers, a caption, 
 | `ROUTER_BACKEND` | `llm` | `llm` routes with a model; `none` skips routing and lets the answer model choose |
 | `ROUTER_BASE_URL` | `LLM_BASE_URL`, else OpenAI | OpenAI-compatible endpoint for routing |
 | `ROUTER_MODEL` | `LLM_MODEL` | Served model name; a small instruct model is enough |
-| `ROUTER_API_KEY` | `LLM_API_KEY`, else `OPENAI_API_KEY` | Sent as a bearer token only when set |
+| `ROUTER_API_KEY` | `LLM_API_KEY` when routing via `LLM_BASE_URL`; `OPENAI_API_KEY` for OpenAI | Sent as a bearer token only when set; `LLM_API_KEY` is never sent to a separate `ROUTER_BASE_URL` |
 | `ROUTER_EXTRA_BODY` | Unset | JSON merged into the request, e.g. `{"chat_template_kwargs": {"enable_thinking": false}}` for Qwen3 on vLLM |
 | `ROUTER_MAX_TOKENS` | `512` | Output budget; raise it for reasoning models that think before answering |
 | `ROUTER_TIMEOUT` | `30` | Seconds per request |
 | `ROUTER_ON_ERROR` | `auto` | `auto`: on failure the answer model chooses; `fail`: fail the turn with a retryable error |
 
-Servers differ in structured-output support. The router asks for `json_schema` first, then `json_object`, then plain prompting; whichever format the endpoint accepts is remembered per endpoint and model. The parser tolerates `<think>` blocks, code fences and prose around the JSON and accepts a bare option name. Unknown options are rejected.
+Servers differ in structured-output support. The router asks for `json_schema` first, then `json_object`, then plain prompting. After a definitive rejection (HTTP 400, 415, 422 or 501) the accepted format is remembered per endpoint and model; a 500 degrades only that request, because it may be transient. The parser tolerates `<think>` blocks, code fences and prose around the JSON and accepts a bare option name. Unknown options, unfinished reasoning and empty answers are rejected. Malformed router settings fail at agent startup.
 
 A routing model only classifies, so it can be much smaller and faster than the answer model: a 3–8B instruct model on the same GPU, or a separate Ollama instance, keeps the added latency low. Disable thinking for hybrid reasoning models (`ROUTER_EXTRA_BODY`), or the routing call spends its budget on reasoning.
 

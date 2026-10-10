@@ -27,6 +27,9 @@ ROUTER_ENV = [
     "LLM_API_KEY",
     "LLM_MODEL",
     "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_API_BASE",
+    "ROUTER_TIMEOUT",
 ]
 
 
@@ -238,7 +241,7 @@ def test_claude_answer_model_needs_explicit_router(monkeypatch):
         router.endpoint()
 
 
-@pytest.mark.parametrize("status", [400, 422, 500])
+@pytest.mark.parametrize("status", [400, 422])
 def test_unsupported_response_formats_degrade_and_are_remembered(monkeypatch, status):
     monkeypatch.setenv("LLM_BASE_URL", "http://llama:8080/v1")
     monkeypatch.setenv("LLM_MODEL", "local")
@@ -255,6 +258,25 @@ def test_unsupported_response_formats_degrade_and_are_remembered(monkeypatch, st
     assert router.route([])["visualization"] == "flowchart"
     assert router.route([])["visualization"] == "flowchart"
     assert formats == ["json_schema", "json_object", "json_object"]
+
+
+def test_server_errors_degrade_one_request_without_downgrading_later_turns(monkeypatch):
+    # llama-cpp-python answers an unsupported json_schema with 500, but a 500
+    # can also be transient; it must not permanently skip json_schema.
+    monkeypatch.setenv("LLM_BASE_URL", "http://llama:8080/v1")
+    monkeypatch.setenv("LLM_MODEL", "local")
+    formats = []
+    statuses = iter([500, 200, 200])
+
+    def post(self, url, headers=None, json=None):
+        formats.append(json.get("response_format", {}).get("type"))
+        status = next(statuses)
+        return completion(decision_json("flowchart")) if status == 200 else httpx.Response(status)
+
+    monkeypatch.setattr(httpx.Client, "post", post)
+    assert router.route([])["visualization"] == "flowchart"
+    assert router.route([])["visualization"] == "flowchart"
+    assert formats == ["json_schema", "json_object", "json_schema"]
 
 
 def test_servers_without_json_modes_use_plain_prompting(monkeypatch):
@@ -335,11 +357,66 @@ def test_backend_none_skips_the_router_call(monkeypatch):
     assert middleware.before_agent(state, None)["visualization_decision"] == AUTO_DECISION
 
 
-def test_invalid_backend_is_a_configuration_error(monkeypatch):
-    monkeypatch.setenv("ROUTER_BACKEND", "jev")
-    middleware = router.VisualizationRouterMiddleware()
-    with pytest.raises(ValueError, match="ROUTER_BACKEND"):
-        middleware.before_agent({"messages": [HumanMessage(content="hi", id="one")]}, None)
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("ROUTER_BACKEND", "jev"),
+        ("ROUTER_ON_ERROR", "ignore"),
+        ("ROUTER_TIMEOUT", "soon"),
+        ("ROUTER_MAX_TOKENS", "0"),
+        ("ROUTER_EXTRA_BODY", "[1]"),
+    ],
+)
+def test_malformed_settings_fail_at_startup(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=name):
+        router.VisualizationRouterMiddleware()
+
+
+def test_separate_router_host_never_receives_the_answer_model_key(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://llm.internal/v1")
+    monkeypatch.setenv("LLM_API_KEY", "llm-secret")
+    monkeypatch.setenv("LLM_MODEL", "big")
+    assert router.endpoint()[2] == "llm-secret"
+    monkeypatch.setenv("ROUTER_BASE_URL", "http://router.elsewhere/v1")
+    assert router.endpoint()[2] == ""
+    monkeypatch.setenv("ROUTER_API_KEY", "router-secret")
+    assert router.endpoint()[2] == "router-secret"
+
+
+def test_server_key_follows_openai_base_url_but_byok_stays_on_openai(monkeypatch):
+    from src.credentials import Credentials, current_credentials
+
+    monkeypatch.setenv("OPENAI_API_KEY", "gateway-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gateway.internal/v1/")
+    assert router.endpoint()[:3] == ("https://gateway.internal/v1", "chat-latest", "gateway-key")
+    token = current_credentials.set(Credentials("visitor"))
+    try:
+        assert router.endpoint()[:4] == ("https://api.openai.com/v1", "chat-latest", "visitor", False)
+    finally:
+        current_credentials.reset(token)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"role": "assistant", "content": "", "reasoning_content": 'maybe {"visualization": "table"}'},
+        {"role": "assistant", "content": None},
+    ],
+)
+def test_empty_content_is_not_a_decision(monkeypatch, message):
+    monkeypatch.setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+    monkeypatch.setenv("LLM_MODEL", "local")
+    monkeypatch.setattr(
+        httpx.Client, "post", lambda *a, **k: httpx.Response(200, json={"choices": [{"message": message}]})
+    )
+    with pytest.raises(RouterError, match="ROUTER_MAX_TOKENS"):
+        router.route([])
+
+
+def test_unterminated_reasoning_is_not_a_decision():
+    with pytest.raises(RouterError):
+        parse_decision('<think>Not {"visualization": "table", "confidence": 1}; line_chart fits better')
 
 
 def test_context_excludes_system_and_tool_content_and_is_bounded():

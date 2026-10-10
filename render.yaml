@@ -24,7 +24,8 @@ services:
       - key: LANGSMITH_API_KEY
         sync: false
       # chat-latest and gpt-* route via OpenAI, Claude names via Anthropic;
-      # with LLM_BASE_URL any OpenAI-compatible server (see apps/agent/src/model.py)
+      # with LLM_BASE_URL any OpenAI-compatible server: then set LLM_MODEL to
+      # the served model name (see apps/agent/src/model.py, docs/open-models.md)
       - key: LLM_MODEL
         value: chat-latest
       - key: LLM_BASE_URL
@@ -63,6 +64,10 @@ services:
       - key: APP_URL
         value: https://opengenerativeui.copilotkit.ai
       - key: SKIP_INSTALL_DEPS
+        value: "true"
+      # Public demo: visitors bring their own OpenAI key. Remove for a private
+      # deployment that uses the agent's server-side model. Build-time setting.
+      - key: NEXT_PUBLIC_BYOK
         value: "true"
       - key: LANGGRAPH_DEPLOYMENT_URL
         fromService:

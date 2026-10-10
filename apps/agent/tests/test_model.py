@@ -122,8 +122,13 @@ def test_compatible_endpoint_rejects_bad_extra_body(monkeypatch, raw):
         build_model()
 
 
-def test_compatible_endpoint_requires_model_name(monkeypatch):
+@pytest.mark.parametrize("value", [None, "  "])
+def test_compatible_endpoint_requires_model_name(monkeypatch, value):
+    # chat-latest must not be sent to a self-hosted server by default.
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:8000/v1")
-    monkeypatch.setenv("LLM_MODEL", "  ")
+    if value is None:
+        monkeypatch.delenv("LLM_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("LLM_MODEL", value)
     with pytest.raises(ValueError, match="LLM_BASE_URL"):
         build_model()
