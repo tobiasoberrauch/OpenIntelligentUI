@@ -21,11 +21,15 @@ MAX_TOKENS = 64000
 
 def build_model(*, allow_unconfigured: bool = False) -> BaseChatModel:
     model_name = os.environ.get("LLM_MODEL", DEFAULT_MODEL).strip()
-    is_openai = model_name == "chat-latest" or model_name.startswith("gpt-")
+    base_url = os.environ.get("OPENAI_BASE_URL", "").strip()
+    # With OPENAI_BASE_URL set, any model name routes to that OpenAI-compatible
+    # endpoint (e.g. a LiteLLM router); otherwise only built-in prefixes apply.
+    is_openai = bool(base_url) or model_name == "chat-latest" or model_name.startswith("gpt-")
     if not is_openai and not model_name.startswith("claude-"):
         raise ValueError(
-            "LLM_MODEL must name a supported provider: claude-* (Anthropic) "
-            "or gpt-*/chat-latest (OpenAI). Unset LLM_MODEL to use the default."
+            "LLM_MODEL must name a supported provider: claude-* (Anthropic), "
+            "gpt-*/chat-latest (OpenAI), or any model with OPENAI_BASE_URL set. "
+            "Unset LLM_MODEL to use the default."
         )
     key_name = "OPENAI_API_KEY" if is_openai else "ANTHROPIC_API_KEY"
     if not os.environ.get(key_name, "").strip():
@@ -39,6 +43,14 @@ def build_model(*, allow_unconfigured: bool = False) -> BaseChatModel:
         # chat-latest follows ChatGPT Instant; explicit gpt-* pins also work.
         from langchain_openai import ChatOpenAI
 
+        if base_url:
+            # Reasoning models behind a router need a large output budget;
+            # widget generation truncates below ~32k tokens.
+            return ChatOpenAI(
+                model=model_name,
+                base_url=base_url,
+                max_tokens=int(os.environ.get("LLM_MAX_TOKENS", MAX_TOKENS)),
+            )
         return ChatOpenAI(model=model_name)
     return ChatAnthropic(
         model=model_name,

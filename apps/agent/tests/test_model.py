@@ -49,6 +49,33 @@ def test_max_tokens_fits_full_widget_generation(monkeypatch):
     assert model.max_tokens >= 32000
 
 
+def test_openai_base_url_routes_custom_models(monkeypatch):
+    monkeypatch.setenv("LLM_MODEL", "qwen3.8-27b")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://10.200.3.60:4000/v1")
+    monkeypatch.setenv("LLM_MAX_TOKENS", "32000")
+    model = build_model()
+    assert isinstance(model, ChatOpenAI)
+    assert model.model_name == "qwen3.8-27b"
+    assert str(model.openai_api_base).rstrip("/") == "http://10.200.3.60:4000/v1"
+    assert model.max_tokens == 32000
+
+
+def test_custom_endpoint_defaults_to_large_max_tokens(monkeypatch):
+    monkeypatch.delenv("LLM_MAX_TOKENS", raising=False)
+    monkeypatch.setenv("LLM_MODEL", "audius-fast")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://10.200.3.60:4000/v1")
+    model = build_model()
+    assert isinstance(model, ChatOpenAI)
+    assert (model.max_tokens or 0) >= 32000
+
+
+def test_custom_model_without_base_url_is_rejected(monkeypatch):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("LLM_MODEL", "qwen3.8-27b")
+    with pytest.raises(ValueError, match="LLM_MODEL"):
+        build_model()
+
+
 def test_main_uses_build_model():
     import ast
     from pathlib import Path
