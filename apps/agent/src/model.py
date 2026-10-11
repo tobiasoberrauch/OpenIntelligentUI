@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.messages import AIMessageChunk
+from langchain_openai import ChatOpenAI
 from pydantic import Field
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -17,6 +18,35 @@ DEFAULT_MODEL = "chat-latest"
 # arrive and the widget is stuck in its preview sandbox). Widget generation
 # routinely needs tens of thousands of output tokens.
 MAX_TOKENS = 64000
+
+
+class DedupChatOpenAI(ChatOpenAI):
+    """ChatOpenAI that drops duplicate tool-call headers some vLLM backends
+    re-emit mid-stream (id+name, with or without args).
+
+    Filtering here matters: the raw callback events that AG-UI consumers
+    convert are emitted from these chunks, before any wrapper sees the
+    aggregated output. A strict consumer rejects the duplicate
+    TOOL_CALL_START ("already in progress") and aborts the whole run.
+    """
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        seen_headers = set()
+        for chunk in super()._stream(
+            messages, stop=stop, run_manager=run_manager, **kwargs
+        ):
+            if _is_duplicate_tool_header(seen_headers, chunk):
+                continue
+            yield chunk
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        seen_headers = set()
+        async for chunk in super()._astream(
+            messages, stop=stop, run_manager=run_manager, **kwargs
+        ):
+            if _is_duplicate_tool_header(seen_headers, chunk):
+                continue
+            yield chunk
 
 
 def build_model(*, allow_unconfigured: bool = False) -> BaseChatModel:
@@ -41,17 +71,15 @@ def build_model(*, allow_unconfigured: bool = False) -> BaseChatModel:
         )
     if is_openai:
         # chat-latest follows ChatGPT Instant; explicit gpt-* pins also work.
-        from langchain_openai import ChatOpenAI
-
         if base_url:
             # Reasoning models behind a router need a large output budget;
             # widget generation truncates below ~32k tokens.
-            return ChatOpenAI(
+            return DedupChatOpenAI(
                 model=model_name,
                 base_url=base_url,
                 max_tokens=int(os.environ.get("LLM_MAX_TOKENS", MAX_TOKENS)),
             )
-        return ChatOpenAI(model=model_name)
+        return DedupChatOpenAI(model=model_name)
     return ChatAnthropic(
         model=model_name,
         max_tokens=MAX_TOKENS,
@@ -129,6 +157,23 @@ def provider_error_boundary():
         raise ValueError("OpenAI request failed. Check your key and model access, or retry.") from None
 
 
+@contextmanager
+def _suppress_inner_events():
+    # This wrapper streams its target model, so both layers emit
+    # on_chat_model_stream events for the same chunks. AG-UI converters
+    # process both and see every tool header twice, then reject the
+    # duplicate TOOL_CALL_START ("already in progress") and abort the run.
+    # Clearing the ambient runnable config for the inner call suppresses its
+    # events; only this layer streams to the consumer.
+    from langchain_core.runnables.config import var_child_runnable_config
+
+    token = var_child_runnable_config.set({})
+    try:
+        yield
+    finally:
+        var_child_runnable_config.reset(token)
+
+
 class RequestModelMiddleware(AgentMiddleware):
     def wrap_model_call(self, request, handler):
         with provider_error_boundary():
@@ -163,26 +208,66 @@ class CredentialScopedModel(BaseChatModel):
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         with provider_error_boundary():
             model, options = self._target(kwargs)
-            message = model.invoke(messages, stop=stop, **options)
+            with _suppress_inner_events():
+                message = model.invoke(messages, stop=stop, **options)
             return ChatResult(generations=[ChatGeneration(message=message)])
 
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
         with provider_error_boundary():
             model, options = self._target(kwargs)
-            message = await model.ainvoke(messages, stop=stop, **options)
+            with _suppress_inner_events():
+                message = await model.ainvoke(messages, stop=stop, **options)
             return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _stream(self, messages, stop=None, run_manager=None, **kwargs):
         with provider_error_boundary():
             model, options = self._target(kwargs)
-            for chunk in model.stream(messages, stop=stop, **options):
-                yield ChatGenerationChunk(message=as_chunk(chunk))
+            seen_headers = set()
+            with _suppress_inner_events():
+                for chunk in model.stream(messages, stop=stop, **options):
+                    message = as_chunk(chunk)
+                    if _is_duplicate_tool_header(seen_headers, message):
+                        continue
+                    yield ChatGenerationChunk(message=message)
 
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
         with provider_error_boundary():
             model, options = self._target(kwargs)
-            async for chunk in model.astream(messages, stop=stop, **options):
-                yield ChatGenerationChunk(message=as_chunk(chunk))
+            seen_headers = set()
+            with _suppress_inner_events():
+                async for chunk in model.astream(messages, stop=stop, **options):
+                    message = as_chunk(chunk)
+                    if _is_duplicate_tool_header(seen_headers, message):
+                        continue
+                    yield ChatGenerationChunk(message=message)
+
+
+def _is_duplicate_tool_header(seen, chunk) -> bool:
+    # Some vLLM backends re-emit a complete tool-call header (id+name, with or
+    # without args) after already sending it. Strict AG-UI consumers reject
+    # the duplicate TOOL_CALL_START ("already in progress") and abort the run.
+    # Only header entries carry id+name; arg fragments (id=None) are never
+    # treated as duplicates. Accepts both AIMessageChunk and
+    # ChatGenerationChunk (which wraps the message in .message).
+    message = getattr(chunk, "message", chunk)
+    tool_call_chunks = getattr(message, "tool_call_chunks", None) or []
+    if not tool_call_chunks:
+        return False
+    keys = []
+    for entry in tool_call_chunks:
+        if not (entry.get("id") and entry.get("name")):
+            continue
+        key = (
+            entry.get("index"),
+            entry.get("id"),
+            entry.get("name"),
+            entry.get("args") or "",
+        )
+        if key in seen:
+            return True
+        keys.append(key)
+    seen.update(keys)
+    return False
 
 
 def as_chunk(message):

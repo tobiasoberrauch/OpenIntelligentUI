@@ -1,6 +1,8 @@
-"""Anthropic rejects non-consecutive system messages. CopilotKitMiddleware's
-"App Context" SystemMessage is appended after the human turn by the
-add_messages reducer, so the model request must be reordered before the call."""
+"""CopilotKitMiddleware's "App Context" SystemMessage is appended after the
+human turn by the add_messages reducer. Anthropic requires system messages at
+the head; vLLM/SGLang (via LiteLLM) reject more than ONE system message even
+when consecutive ("System message must be at the beginning"). The middleware
+therefore merges all system content into a single leading message."""
 
 import asyncio
 import os
@@ -34,11 +36,56 @@ def test_moves_trailing_system_message_to_front():
     assert _wrap([human, ctx]) == [ctx, human]
 
 
-def test_preserves_relative_order_of_system_messages():
+def test_merges_system_messages_into_single_leading_message():
     s1 = SystemMessage(content="first")
     human = HumanMessage(content="hi")
     s2 = SystemMessage(content="App Context: second")
-    assert _wrap([s1, human, s2]) == [s1, s2, human]
+    result = _wrap([s1, human, s2])
+    assert len(result) == 2
+    assert isinstance(result[0], SystemMessage)
+    assert result[0].content == "first\n\nApp Context: second"
+    assert result[1] == human
+
+
+def test_merges_into_request_system_message_when_present():
+    middleware = ConsecutiveSystemMessagesMiddleware()
+    main = SystemMessage(content="main prompt")
+    human = HumanMessage(content="hi")
+    ctx = SystemMessage(content="App Context: design skill")
+    request = ModelRequest(model=build_model(), messages=[human, ctx], system_message=main)
+    seen = {}
+
+    def handler(req):
+        seen["messages"] = list(req.messages)
+        seen["system"] = req.system_message
+        return "called"
+
+    middleware.wrap_model_call(request, handler)
+    assert seen["messages"] == [human]
+    assert seen["system"].content == "main prompt\n\nApp Context: design skill"
+
+
+def test_single_system_message_total_for_vllm_backends():
+    # vLLM via LiteLLM 400s on >1 system message anywhere in the payload.
+    middleware = ConsecutiveSystemMessagesMiddleware()
+    main = SystemMessage(content="main")
+    request = ModelRequest(
+        model=build_model(),
+        messages=[HumanMessage(content="hi"), SystemMessage(content="ctx"), SystemMessage(content="ctx2")],
+        system_message=main,
+    )
+    seen = {}
+
+    def handler(req):
+        seen["messages"] = list(req.messages)
+        seen["system"] = req.system_message
+        return "called"
+
+    middleware.wrap_model_call(request, handler)
+    total = sum(1 for m in seen["messages"] if getattr(m, "type", None) in ("system", "developer"))
+    if seen["system"] is not None:
+        total += 1
+    assert total == 1
 
 
 def test_noop_when_already_consecutive():

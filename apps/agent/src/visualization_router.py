@@ -229,11 +229,29 @@ def _local_decision(answer: ChoiceAnswer) -> dict:
         ) from exc
 
 
+def _clear_ambient_config():
+    # Clear the ambient runnable config so this side-call emits no
+    # on_chat_model_stream events; otherwise the AG-UI adapter renders the
+    # routing JSON as a chat message.
+    from langchain_core.runnables.config import var_child_runnable_config
+
+    return var_child_runnable_config.set({})
+
+
+def _restore_ambient_config(token):
+    from langchain_core.runnables.config import var_child_runnable_config
+
+    var_child_runnable_config.reset(token)
+
+
 def local_route(context):
     try:
-        answer = _local_model().with_structured_output(ChoiceAnswer).invoke(
-            _routing_messages(context)
-        )
+        structured = _local_model().with_structured_output(ChoiceAnswer)
+        token = _clear_ambient_config()
+        try:
+            answer = structured.invoke(_routing_messages(context))
+        finally:
+            _restore_ambient_config(token)
     except Exception:
         raise ValueError(
             "Local visualization routing failed. Please retry."
@@ -243,9 +261,12 @@ def local_route(context):
 
 async def local_aroute(context):
     try:
-        answer = await _local_model().with_structured_output(ChoiceAnswer).ainvoke(
-            _routing_messages(context)
-        )
+        structured = _local_model().with_structured_output(ChoiceAnswer)
+        token = _clear_ambient_config()
+        try:
+            answer = await structured.ainvoke(_routing_messages(context))
+        finally:
+            _restore_ambient_config(token)
     except Exception:
         raise ValueError(
             "Local visualization routing failed. Please retry."
