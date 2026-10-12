@@ -71,6 +71,7 @@ def build_model(*, allow_unconfigured: bool = False) -> BaseChatModel:
         )
     if is_openai:
         # chat-latest follows ChatGPT Instant; explicit gpt-* pins also work.
+        temperature = float(os.environ.get("LLM_TEMPERATURE", "0"))
         if base_url:
             # Reasoning models behind a router need a large output budget;
             # widget generation truncates below ~32k tokens.
@@ -78,8 +79,9 @@ def build_model(*, allow_unconfigured: bool = False) -> BaseChatModel:
                 model=model_name,
                 base_url=base_url,
                 max_tokens=int(os.environ.get("LLM_MAX_TOKENS", MAX_TOKENS)),
+                temperature=temperature,
             )
-        return DedupChatOpenAI(model=model_name)
+        return DedupChatOpenAI(model=model_name, temperature=temperature)
     return ChatAnthropic(
         model=model_name,
         max_tokens=MAX_TOKENS,

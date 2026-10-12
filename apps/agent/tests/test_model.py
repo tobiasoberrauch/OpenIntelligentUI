@@ -178,6 +178,15 @@ def test_dedup_chat_openai_filters_duplicate_headers(monkeypatch):
     assert len(headers) == 1
 
 
+def test_temperature_defaults_to_zero_and_is_overridable(monkeypatch):
+    monkeypatch.setenv("LLM_MODEL", "qwen3.5:27b")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.delenv("LLM_TEMPERATURE", raising=False)
+    assert build_model().temperature == 0
+    monkeypatch.setenv("LLM_TEMPERATURE", "0.7")
+    assert build_model().temperature == 0.7
+
+
 def test_main_uses_build_model():
     import ast
     from pathlib import Path

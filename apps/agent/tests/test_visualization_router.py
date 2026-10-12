@@ -286,6 +286,36 @@ def test_byok_credentials_always_use_jev(monkeypatch):
     assert seen == [router.JEV_URL]
 
 
+def test_normalize_a2ui_args_parses_stringified_components():
+    import src.visualization_router as router
+
+    args = {"surfaceId": "s1", "catalogId": "c", "components": '[{"id": "root"}]'}
+    fixed = router.normalize_a2ui_args(args)
+    assert fixed["components"] == [{"id": "root"}]
+    assert fixed["surfaceId"] == "s1"
+    assert router.normalize_a2ui_args({"a": 1}) == {"a": 1}
+    assert router.normalize_a2ui_args({"components": "[broken"})["components"] == "[broken"
+
+
+def test_a2ui_normalization_middleware_fixes_last_message():
+    import asyncio
+    from langchain_core.messages import AIMessage, HumanMessage
+    import src.visualization_router as router
+
+    bad = AIMessage(
+        content="",
+        tool_calls=[{"name": "render_a2ui", "args": {"components": '[{"id": "root"}]'}, "id": "c1", "type": "tool_call"}],
+    )
+    state = {"messages": [HumanMessage(content="hi"), bad]}
+    middleware = router.A2UINormalizationMiddleware()
+    update = middleware.after_model(state, None)
+    assert update is not None
+    fixed = update["messages"][-1].tool_calls[0]["args"]
+    assert fixed["components"] == [{"id": "root"}]
+    assert asyncio.run(middleware.aafter_model(state, None)) is not None
+    assert middleware.after_model({"messages": [HumanMessage(content="hi")]}, None) is None
+
+
 def test_real_graph_filters_injected_frontend_tools_and_routes_once(monkeypatch):
     import asyncio
     from deepagents import create_deep_agent

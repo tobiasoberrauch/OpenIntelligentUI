@@ -318,7 +318,7 @@ def routed_request(request):
     ]
     note = f"\n\nCRITICAL: Jev presentation decision for this user turn: renderer={renderer}; visualization={decision['visualization']}. Use this presentation when answering; do not substitute another rendering tool. If required data is unavailable, ask a concise clarification instead of fabricating it."
     if renderer == "a2ui":
-        note += '\nUse the A2UI Table component from catalog copilotkit://open-generative-ui-tables. Its title, columns (string array), rows (array of string arrays, same width as columns), and source (honest data provenance) are required. When render_a2ui is available, call it with surfaceId (a unique string), catalogId="copilotkit://open-generative-ui-tables", and components as a flat array containing {"id":"root","component":"Table","title":...,"columns":[...],"rows":[[...]],"source":...}. The Table is the root for this custom catalog. Pass these structured arguments directly, not serialized operations or a2ui_json. If another A2UI tool is available instead, follow its advertised argument schema and use this same catalog and Table component. No HTML or scripts.'
+        note += '\nUse the A2UI Table component from catalog copilotkit://open-generative-ui-tables. Its title, columns (string array), rows (array of string arrays, same width as columns), and source (honest data provenance) are required. When render_a2ui is available, call it with surfaceId (a unique string), catalogId="copilotkit://open-generative-ui-tables", and components as an array with EXACTLY ONE element: {"id":"root","component":"Table","title":...,"columns":[...],"rows":[[...]],"source":...}. The Table itself is the root for this custom catalog. Do NOT wrap it in Column, Row, or any other component. Do NOT use "child", "children", or any other linking keys. Components must be a real JSON array, never a serialized string. Pass these structured arguments directly, not serialized operations or a2ui_json. If another A2UI tool is available instead, follow its advertised argument schema and use this same catalog and Table component. No HTML or scripts.'
     elif renderer == "open_generative_ui":
         note += "\nUse generateSandboxedUi. Choose an appropriate simple library or SVG for this visualization; label axes, units and assumptions."
     if decision["visualization"] in {"map", "animated_route"}:
@@ -358,3 +358,57 @@ class JevVisualizationMiddleware(AgentMiddleware):
 
     async def awrap_model_call(self, request, handler):
         return await handler(routed_request(request))
+
+
+A2UI_TOOLS = {"render_a2ui", "send_a2ui_json_to_client", "generate_a2ui"}
+A2UI_JSON_FIELDS = ("components", "data", "a2ui_json")
+
+
+def normalize_a2ui_args(args):
+    if not isinstance(args, dict):
+        return args
+    fixed = dict(args)
+    for key in A2UI_JSON_FIELDS:
+        value = fixed.get(key)
+        if isinstance(value, str):
+            try:
+                fixed[key] = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return fixed
+
+
+class A2UINormalizationMiddleware(AgentMiddleware):
+    """Parse stringified JSON args some local models emit for A2UI tools.
+
+    Must run before CopilotKitMiddleware.after_model splits frontend tool
+    calls, so register it first in the middleware list.
+    """
+
+    def _fix_state(self, state):
+        from langchain_core.messages import AIMessage
+
+        messages = state.get("messages", [])
+        if not messages:
+            return None
+        last = messages[-1]
+        if not isinstance(last, AIMessage) or not getattr(last, "tool_calls", None):
+            return None
+        fixed_calls = []
+        changed = False
+        for call in last.tool_calls:
+            if call.get("name") in A2UI_TOOLS:
+                new_args = normalize_a2ui_args(call.get("args", {}))
+                if new_args != call.get("args", {}):
+                    changed = True
+                    call = {**call, "args": new_args}
+            fixed_calls.append(call)
+        if not changed:
+            return None
+        return {"messages": [*messages[:-1], last.model_copy(update={"tool_calls": fixed_calls})]}
+
+    def after_model(self, state, runtime):
+        return self._fix_state(state)
+
+    async def aafter_model(self, state, runtime):
+        return self._fix_state(state)
