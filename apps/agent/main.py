@@ -23,7 +23,7 @@ from src.credentials import (
     server_credentials_available,
     validate_credentials,
 )
-from src.visualization_router import JevVisualizationMiddleware
+from src.visualization_router import A2UINormalizationMiddleware, JevVisualizationMiddleware
 from src.skill_backend import SKILL_SOURCES, build_agent_backend
 from src.query import query_data
 from src.todos import AgentState, todo_tools
@@ -38,6 +38,7 @@ agent = create_deep_agent(
     model=CredentialScopedModel(fallback=build_model(allow_unconfigured=True)),
     tools=[query_data, get_trip_stop_images, plan_visualization, *todo_tools, generate_form],
     middleware=[
+        A2UINormalizationMiddleware(),
         RequestModelMiddleware(),
         CopilotKitMiddleware(),
         JevVisualizationMiddleware(),
